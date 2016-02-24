@@ -2007,11 +2007,14 @@ static struct hvm_function_table __initdata vmx_function_table = {
     .nhvm_intr_blocked    = nvmx_intr_blocked,
     .nhvm_domain_relinquish_resources = nvmx_domain_relinquish_resources,
     .update_eoi_exit_bitmap = vmx_update_eoi_exit_bitmap,
+
+//SURAVEE AVIC:
     .virtual_intr_delivery_enabled = vmx_virtual_intr_delivery_enabled,
     .process_isr          = vmx_process_isr,
     .deliver_posted_intr  = vmx_deliver_posted_intr,
     .sync_pir_to_irr      = vmx_sync_pir_to_irr,
     .handle_eoi           = vmx_handle_eoi,
+
     .nhvm_hap_walk_L1_p2m = nvmx_hap_walk_L1_p2m,
     .hypervisor_cpuid_leaf = vmx_hypervisor_cpuid_leaf,
     .enable_msr_exit_interception = vmx_enable_msr_exit_interception,

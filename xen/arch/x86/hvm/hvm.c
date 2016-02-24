@@ -2568,10 +2568,14 @@ void hvm_vcpu_destroy(struct vcpu *v)
     tasklet_kill(&v->arch.hvm_vcpu.assert_evtchn_irq_tasklet);
     hvm_vcpu_cacheattr_destroy(v);
 
-    if ( is_hvm_vcpu(v) )
-        vlapic_destroy(v);
+//SURAVEE: THIS IS WRONG
+//    if ( is_hvm_vcpu(v) )
+//        vlapic_destroy(v);
 
     hvm_funcs.vcpu_destroy(v);
+
+    if ( is_hvm_vcpu(v) )
+        vlapic_destroy(v);
 }
 
 void hvm_vcpu_down(struct vcpu *v)

@@ -81,6 +81,7 @@ extern u32 svm_feature_flags;
 #define SVM_FEATURE_FLUSHBYASID    6 /* TLB flush by ASID support */
 #define SVM_FEATURE_DECODEASSISTS  7 /* Decode assists support */
 #define SVM_FEATURE_PAUSEFILTER   10 /* Pause intercept filter support */
+#define SVM_FEATURE_AVIC          13 /* AVIC support */
 
 #define cpu_has_svm_feature(f) test_bit(f, &svm_feature_flags)
 #define cpu_has_svm_npt       cpu_has_svm_feature(SVM_FEATURE_NPT)
@@ -91,6 +92,7 @@ extern u32 svm_feature_flags;
 #define cpu_has_svm_decode    cpu_has_svm_feature(SVM_FEATURE_DECODEASSISTS)
 #define cpu_has_pause_filter  cpu_has_svm_feature(SVM_FEATURE_PAUSEFILTER)
 #define cpu_has_tsc_ratio     cpu_has_svm_feature(SVM_FEATURE_TSCRATEMSR)
+#define cpu_has_svm_avic      cpu_has_svm_feature(SVM_FEATURE_AVIC)
 
 #define SVM_PAUSEFILTER_INIT    3000
 

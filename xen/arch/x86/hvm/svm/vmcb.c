@@ -28,6 +28,7 @@
 #include <asm/msr-index.h>
 #include <asm/p2m.h>
 #include <asm/hvm/support.h>
+#include <asm/hvm/svm/avic.h>
 #include <asm/hvm/svm/svm.h>
 #include <asm/hvm/svm/svmdebug.h>
 
@@ -66,6 +67,11 @@ struct host_save_area *alloc_host_save_area(void)
     return hsa;
 }
 
+#define AVIC_HPA_MASK	~((0xFFFULL << 52) || 0xFFF)
+
+/* NOTE: Current max index allowed for physical APIC ID table is 255 */
+#define AVIC_PHY_APIC_ID_MAX	0xFF
+
 /* This function can directly access fields which are covered by clean bits. */
 static int construct_vmcb(struct vcpu *v)
 {
@@ -91,11 +97,16 @@ static int construct_vmcb(struct vcpu *v)
     /* Intercept all debug-register writes. */
     vmcb->_dr_intercepts = ~0u;
 
+//SURAVEE: Check this
     /* Intercept all control-register accesses except for CR2 and CR8. */
-    vmcb->_cr_intercepts = ~(CR_INTERCEPT_CR2_READ |
+    if ( !svm_avic )
+        vmcb->_cr_intercepts = ~(CR_INTERCEPT_CR2_READ |
                              CR_INTERCEPT_CR2_WRITE |
                              CR_INTERCEPT_CR8_READ |
                              CR_INTERCEPT_CR8_WRITE);
+    else
+        vmcb->_cr_intercepts = ~(CR_INTERCEPT_CR2_READ |
+                             CR_INTERCEPT_CR2_WRITE );
 
     /* I/O and MSR permission bitmaps. */
     arch_svm->msrpm = alloc_xenheap_pages(get_order_from_bytes(MSRPM_SIZE), 0);
@@ -224,6 +235,8 @@ static int construct_vmcb(struct vcpu *v)
         vmcb->_pause_filter_count = SVM_PAUSEFILTER_INIT;
         vmcb->_general1_intercepts |= GENERAL1_INTERCEPT_PAUSE;
     }
+
+    svm_avic_init_vmcb(v);
 
     vmcb->cleanbits.bytes = 0;
 
