@@ -821,13 +821,23 @@ static u16 __init parse_ivhd_device_special(
     return dev_length;
 }
 
+static inline int get_ivhd_header_size(const struct acpi_ivrs_hardware *ivhd_block)
+{
+    if ( ivhd_block->header.type == ACPI_IVRS_TYPE_HARDWARE)
+        return 24;
+    if ( ivhd_block->header.type == ACPI_IVRS_TYPE_HARDWARE_11H)
+        return 40;
+    return 0;
+}
+
 static int __init parse_ivhd_block(const struct acpi_ivrs_hardware *ivhd_block)
 {
     const union acpi_ivhd_device *ivhd_device;
     u16 block_length, dev_length;
+    int hdr_size = get_ivhd_header_size(ivhd_block) ;
     struct amd_iommu *iommu;
 
-    if ( ivhd_block->header.length < sizeof(*ivhd_block) )
+    if ( ivhd_block->header.length < hdr_size )
     {
         AMD_IOMMU_DEBUG("IVHD Error: Invalid Block Length!\n");
         return -ENODEV;
@@ -845,7 +855,7 @@ static int __init parse_ivhd_block(const struct acpi_ivrs_hardware *ivhd_block)
     }
 
     /* parse Device Entries */
-    block_length = sizeof(*ivhd_block);
+    block_length = hdr_size;
     while ( ivhd_block->header.length >=
             (block_length + sizeof(struct acpi_ivrs_de_header)) )
     {
@@ -901,7 +911,7 @@ static int __init parse_ivhd_block(const struct acpi_ivrs_hardware *ivhd_block)
                 ivhd_block->header.length, block_length, iommu);
             break;
         default:
-            AMD_IOMMU_DEBUG("IVHD Error: Invalid Device Type!\n");
+            AMD_IOMMU_DEBUG("IVHD Error: %s: Invalid Device Type!\n", __func__);
             dev_length = 0;
             break;
         }
@@ -909,34 +919,6 @@ static int __init parse_ivhd_block(const struct acpi_ivrs_hardware *ivhd_block)
         block_length += dev_length;
         if ( !dev_length )
             return -ENODEV;
-    }
-
-    return 0;
-}
-
-static int __init parse_ivrs_block(const struct acpi_ivrs_header *ivrs_block)
-{
-    const struct acpi_ivrs_hardware *ivhd_block;
-    const struct acpi_ivrs_memory *ivmd_block;
-
-    switch ( ivrs_block->type )
-    {
-    case ACPI_IVRS_TYPE_HARDWARE:
-        ivhd_block = container_of(ivrs_block, const struct acpi_ivrs_hardware,
-                                  header);
-        return parse_ivhd_block(ivhd_block);
-
-    case ACPI_IVRS_TYPE_MEMORY_ALL:
-    case ACPI_IVRS_TYPE_MEMORY_ONE:
-    case ACPI_IVRS_TYPE_MEMORY_RANGE:
-    case ACPI_IVRS_TYPE_MEMORY_IOMMU:
-        ivmd_block = container_of(ivrs_block, const struct acpi_ivrs_memory,
-                                  header);
-        return parse_ivmd_block(ivmd_block);
-
-    default:
-        AMD_IOMMU_DEBUG("IVRS Error: Invalid Block Type!\n");
-        return -ENODEV;
     }
 
     return 0;
@@ -978,6 +960,21 @@ static void __init dump_acpi_table_header(struct acpi_table_header *table)
 
 }
 
+#define to_ivhd_block(hdr) \
+    ( container_of(hdr, const struct acpi_ivrs_hardware, header) )
+#define to_ivmd_block(hdr) \
+    (container_of(hdr, const struct acpi_ivrs_memory, header) )
+
+#define is_ivhd_block(x) \
+    ( x == ACPI_IVRS_TYPE_HARDWARE || \
+      x == ACPI_IVRS_TYPE_HARDWARE_11H )
+
+#define is_ivmd_block(x) \
+    ( x == ACPI_IVRS_TYPE_MEMORY_ALL || \
+      x == ACPI_IVRS_TYPE_MEMORY_ONE || \
+      x == ACPI_IVRS_TYPE_MEMORY_RANGE || \
+      x == ACPI_IVRS_TYPE_MEMORY_IOMMU )
+
 static int __init parse_ivrs_table(struct acpi_table_header *table)
 {
     const struct acpi_ivrs_header *ivrs_block;
@@ -1010,7 +1007,10 @@ static int __init parse_ivrs_table(struct acpi_table_header *table)
             return -ENODEV;
         }
 
-        error = parse_ivrs_block(ivrs_block);
+        if ( ivrs_block->type == ivhd_type )
+            error = parse_ivhd_block(to_ivhd_block(ivrs_block));
+	else if ( is_ivmd_block (ivrs_block->type) )
+            error = parse_ivmd_block(to_ivmd_block(ivrs_block));
         length += ivrs_block->length;
     }
 
@@ -1083,9 +1083,7 @@ static int __init detect_iommu_acpi(struct acpi_table_header *table)
         if ( table->length < (length + ivrs_block->length) )
             return -ENODEV;
         if ( ivrs_block->type == ACPI_IVRS_TYPE_HARDWARE &&
-             amd_iommu_detect_one_acpi(
-                 container_of(ivrs_block, const struct acpi_ivrs_hardware,
-                              header)) != 0 )
+             amd_iommu_detect_one_acpi(to_ivhd_block(ivrs_block)) != 0 )
             return -ENODEV;
         length += ivrs_block->length;
     }
@@ -1102,15 +1100,16 @@ static int __init get_last_bdf_ivhd(
 {
     const union acpi_ivhd_device *ivhd_device;
     u16 block_length, dev_length;
+    int hdr_size = get_ivhd_header_size(ivhd_block) ;
     int last_bdf = 0;
 
-    if ( ivhd_block->header.length < sizeof(*ivhd_block) )
+    if ( ivhd_block->header.length < hdr_size )
     {
         AMD_IOMMU_DEBUG("IVHD Error: Invalid Block Length!\n");
         return -ENODEV;
     }
 
-    block_length = sizeof(*ivhd_block);
+    block_length = hdr_size;
     while ( ivhd_block->header.length >=
             (block_length + sizeof(struct acpi_ivrs_de_header)) )
     {
@@ -1153,7 +1152,7 @@ static int __init get_last_bdf_ivhd(
             dev_length = sizeof(ivhd_device->special);
             break;
         default:
-            AMD_IOMMU_DEBUG("IVHD Error: Invalid Device Type!\n");
+            AMD_IOMMU_DEBUG("IVHD Error: %s: Invalid Device Type!\n", __func__);
             dev_length = 0;
             break;
         }
@@ -1177,12 +1176,9 @@ static int __init get_last_bdf_acpi(struct acpi_table_header *table)
         ivrs_block = (struct acpi_ivrs_header *)((u8 *)table + length);
         if ( table->length < (length + ivrs_block->length) )
             return -ENODEV;
-        if ( ivrs_block->type == ACPI_IVRS_TYPE_HARDWARE )
+        if ( ivrs_block->type == ivhd_type )
         {
-            int ret = get_last_bdf_ivhd(
-                 container_of(ivrs_block, const struct acpi_ivrs_hardware,
-                              header));
-
+            int ret = get_last_bdf_ivhd(to_ivhd_block(ivrs_block));
             if ( ret < 0 )
                 return ret;
             UPDATE_LAST_BDF(ret);
@@ -1211,4 +1207,55 @@ int __init amd_iommu_update_ivrs_mapping_acpi(void)
         return -EPERM;
 
     return acpi_table_parse(ACPI_SIG_IVRS, parse_ivrs_table);
+}
+
+static int __init
+get_supported_ivhd_type(struct acpi_table_header *table)
+{
+    unsigned long length = sizeof(struct acpi_table_ivrs);
+    const struct acpi_ivrs_header *ivrs_block, *blk = NULL;
+
+    while ( table->length > (length + sizeof(*ivrs_block)) )
+    {
+        ivrs_block = (struct acpi_ivrs_header *)((u8 *)table + length);
+
+        if ( table->length < (length + ivrs_block->length) )
+        {
+            AMD_IOMMU_DEBUG("IVRS Error: "
+                            "Table Length Exceeded: %#x -> %#lx\n",
+                            table->length,
+                            (length + ivrs_block->length));
+            return -ENODEV;
+        }
+
+        if ( is_ivhd_block (ivrs_block->type) )
+        {
+            AMD_IOMMU_DEBUG("IVRS Block: Found type %#x flags %#x len %#x id %#x\n",
+                            ivrs_block->type, ivrs_block->flags,
+                            ivrs_block->length, ivrs_block->device_id);
+            if ( ivrs_block->type > IVHD_HIGHEST_SUPPORT_TYPE )
+                break;
+            blk = ivrs_block;
+        }
+
+        length += ivrs_block->length;
+    }
+
+    if ( !blk )
+    {
+        printk(XENLOG_ERR "Cannot find supported IVHD type.\n");
+        return -ENODEV;
+    }
+
+    AMD_IOMMU_DEBUG("Using IVHD type %#x\n", blk->type);
+
+    return blk->type;
+}
+
+int __init amd_iommu_get_supported_ivhd_type(void)
+{
+    if ( unlikely(acpi_gbl_FADT.boot_flags & ACPI_FADT_NO_MSI) )
+        return -EPERM;
+
+    return acpi_table_parse(ACPI_SIG_IVRS, get_supported_ivhd_type);
 }

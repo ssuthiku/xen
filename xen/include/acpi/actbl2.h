@@ -527,11 +527,14 @@ struct acpi_ivrs_header {
 
 enum acpi_ivrs_type {
 	ACPI_IVRS_TYPE_HARDWARE = 0x10,
+	ACPI_IVRS_TYPE_HARDWARE_11H = 0x11,
 	ACPI_IVRS_TYPE_MEMORY_ALL /* _MEMORY1 */ = 0x20,
 	ACPI_IVRS_TYPE_MEMORY_ONE /* _MEMORY2 */ = 0x21,
 	ACPI_IVRS_TYPE_MEMORY_RANGE /* _MEMORY3 */ = 0x22,
 	ACPI_IVRS_TYPE_MEMORY_IOMMU = 0x23
 };
+
+#define IVHD_HIGHEST_SUPPORT_TYPE	ACPI_IVRS_TYPE_HARDWARE_11H
 
 /* Masks for Flags field above for IVHD subtable */
 
@@ -560,7 +563,9 @@ struct acpi_ivrs_hardware {
 	u64 base_address;	/* IOMMU control registers */
 	u16 pci_segment_group;
 	u16 info;		/* MSI number and unit ID */
-	u32 reserved;
+	u32 iommu_attr;
+	u64 efr_image;		/* Extd feature register */
+	u64 reserved;
 };
 
 /* Masks for Info field above */
