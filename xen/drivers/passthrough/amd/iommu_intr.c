@@ -27,6 +27,86 @@
 #define INTREMAP_LENGTH 0xB
 #define INTREMAP_ENTRIES (1 << INTREMAP_LENGTH)
 
+/**
+ * Structure representing interrupt remapping table entry
+ * when in GAEn=1 (ga) mode (128-bit)
+ */
+union irte_ga_lo {
+    u64 val;
+
+    /* For int remapping */
+    struct {
+        u64 valid	: 1,
+            no_fault	: 1,
+            /* ------ */
+            int_type	: 3,
+            rq_eoi	: 1,
+            dm		: 1,
+            /* ------ */
+            guest_mode	: 1,
+            destination	: 8,
+            rsvd	: 48;
+    } fields_remap;
+
+    /* For guest vAPIC */
+    struct {
+        u64 valid	: 1,
+            no_fault	: 1,
+            /* ------ */
+            ga_log_intr	: 1,
+            rsvd1	: 3,
+            is_run	: 1,
+            /* ------ */
+            guest_mode	: 1,
+            destination	: 8,
+            rsvd2	: 16,
+            ga_tag	: 32;
+    } fields_vapic;
+};
+
+union irte_ga_hi {
+    u64 val;
+    struct {
+        u64 vector	: 8,
+            rsvd_1	: 4,
+            ga_root_ptr	: 40,
+            rsvd_2	: 12;
+    } fields;
+};
+
+struct irte_ga {
+    union irte_ga_lo lo;
+    union irte_ga_hi hi;
+};
+
+/**
+ * Structure representing interrupt remapping table entry
+ * when in GAEn=0 (legacy) mode (32-bit)
+ */
+union irte_legacy {
+    u32 val;
+    struct {
+        u32 valid	: 1,
+            no_fault	: 1,
+            int_type	: 3,
+            rq_eoi	: 1,
+            dm		: 1,
+            rsvd_1	: 1,
+            destination	: 8,
+            vector	: 8,
+            rsvd_2	: 8;
+    } fields;
+};
+
+struct irte {
+    int mode;
+    void *ptr;
+};
+
+enum iommu_intr_mode_type iommu_intr_mode = IOMMU_GUEST_IR_LEGACY;
+
+/* -------------------------------------------------------------------------- */
+
 struct ioapic_sbdf ioapic_sbdf[MAX_IO_APICS];
 struct hpet_sbdf hpet_sbdf;
 void *shared_intremap_table;
@@ -78,47 +158,67 @@ static unsigned int alloc_intremap_entry(int seg, int bdf, unsigned int nr)
     return slot;
 }
 
-static u32 *get_intremap_entry(int seg, int bdf, int offset)
+static int get_intremap_entry(int seg, int bdf, int offset, struct irte *entry)
 {
-    u32 *table = get_ivrs_mappings(seg)[bdf].intremap_table;
+    void *table = get_ivrs_mappings(seg)[bdf].intremap_table;
 
     ASSERT( (table != NULL) && (offset < INTREMAP_ENTRIES) );
 
-    return table + offset;
+    entry->mode = iommu_intr_mode;
+    if ( iommu_intr_mode == IOMMU_GUEST_IR_LEGACY )
+        entry->ptr = ((union irte_legacy *)table) + offset;
+    else
+        entry->ptr = ((struct irte_ga *)table) + offset;
+
+    return 0;
 }
 
 static void free_intremap_entry(int seg, int bdf, int offset)
 {
-    u32 *entry = get_intremap_entry(seg, bdf, offset);
+    if ( iommu_intr_mode == IOMMU_GUEST_IR_LEGACY )
+    {
+        struct irte entry;
 
-    memset(entry, 0, sizeof(u32));
+        get_intremap_entry(seg, bdf, offset, &entry);
+        if ( entry.mode == IOMMU_GUEST_IR_LEGACY )
+            memset(entry.ptr, 0, sizeof(u32));
+        else
+            memset(entry.ptr, 0, sizeof(struct irte_ga));
+    }
     __clear_bit(offset, get_ivrs_mappings(seg)[bdf].intremap_inuse);
 }
 
-static void update_intremap_entry(u32* entry, u8 vector, u8 int_type,
-    u8 dest_mode, u8 dest)
+static void update_intremap_entry(struct irte *entry, u8 vector, u8 int_type,
+                                  u8 dest_mode, u8 dest)
 {
-    set_field_in_reg_u32(IOMMU_CONTROL_ENABLED, 0,
-                            INT_REMAP_ENTRY_REMAPEN_MASK,
-                            INT_REMAP_ENTRY_REMAPEN_SHIFT, entry);
-    set_field_in_reg_u32(IOMMU_CONTROL_DISABLED, *entry,
-                            INT_REMAP_ENTRY_SUPIOPF_MASK,
-                            INT_REMAP_ENTRY_SUPIOPF_SHIFT, entry);
-    set_field_in_reg_u32(int_type, *entry,
-                            INT_REMAP_ENTRY_INTTYPE_MASK,
-                            INT_REMAP_ENTRY_INTTYPE_SHIFT, entry);
-    set_field_in_reg_u32(IOMMU_CONTROL_DISABLED, *entry,
-                            INT_REMAP_ENTRY_REQEOI_MASK,
-                            INT_REMAP_ENTRY_REQEOI_SHIFT, entry);
-    set_field_in_reg_u32((u32)dest_mode, *entry,
-                            INT_REMAP_ENTRY_DM_MASK,
-                            INT_REMAP_ENTRY_DM_SHIFT, entry);
-    set_field_in_reg_u32((u32)dest, *entry,
-                            INT_REMAP_ENTRY_DEST_MAST,
-                            INT_REMAP_ENTRY_DEST_SHIFT, entry);
-    set_field_in_reg_u32((u32)vector, *entry,
-                            INT_REMAP_ENTRY_VECTOR_MASK,
-                            INT_REMAP_ENTRY_VECTOR_SHIFT, entry);
+    if ( entry->mode == IOMMU_GUEST_IR_LEGACY )
+    {
+        set_field_in_reg_u32(IOMMU_CONTROL_ENABLED, 0,
+                                INT_REMAP_ENTRY_REMAPEN_MASK,
+                                INT_REMAP_ENTRY_REMAPEN_SHIFT, (u32*)entry->ptr);
+        set_field_in_reg_u32(IOMMU_CONTROL_DISABLED, *(u32 *)entry->ptr,
+                                INT_REMAP_ENTRY_SUPIOPF_MASK,
+                                INT_REMAP_ENTRY_SUPIOPF_SHIFT, (u32 *)entry->ptr);
+        set_field_in_reg_u32(int_type, *(u32 *)entry->ptr,
+                                INT_REMAP_ENTRY_INTTYPE_MASK,
+                                INT_REMAP_ENTRY_INTTYPE_SHIFT, entry->ptr);
+        set_field_in_reg_u32(IOMMU_CONTROL_DISABLED, *(u32 *)entry->ptr,
+                                INT_REMAP_ENTRY_REQEOI_MASK,
+                                INT_REMAP_ENTRY_REQEOI_SHIFT, (u32 *)entry->ptr);
+        set_field_in_reg_u32((u32)dest_mode, *(u32 *)entry->ptr,
+                                INT_REMAP_ENTRY_DM_MASK,
+                                INT_REMAP_ENTRY_DM_SHIFT, (u32 *)entry->ptr);
+        set_field_in_reg_u32((u32)dest, *(u32 *)entry->ptr,
+                                INT_REMAP_ENTRY_DEST_MAST,
+                                INT_REMAP_ENTRY_DEST_SHIFT, (u32 *)entry->ptr);
+        set_field_in_reg_u32((u32)vector, *(u32 *)entry->ptr,
+                                INT_REMAP_ENTRY_VECTOR_MASK,
+                                INT_REMAP_ENTRY_VECTOR_SHIFT, (u32 *)entry->ptr);
+    }
+    else
+    {
+        //SURAVEE: TODO: AVIC
+    }
 }
 
 static inline int get_rte_index(const struct IO_APIC_route_entry *rte)
@@ -140,7 +240,7 @@ static int update_intremap_entry_from_ioapic(
     u16 *index)
 {
     unsigned long flags;
-    u32* entry;
+    struct irte entry;
     u8 delivery_mode, dest, vector, dest_mode;
     int req_id;
     spinlock_t *lock;
@@ -170,22 +270,22 @@ static int update_intremap_entry_from_ioapic(
         lo_update = 1;
     }
 
-    entry = get_intremap_entry(iommu->seg, req_id, offset);
+    get_intremap_entry(iommu->seg, req_id, offset, &entry);
     if ( !lo_update )
     {
         /*
          * Low half of incoming RTE is already in remapped format,
-         * so need to recover vector and delivery mode from IRTE.
-         */
+	 * so need to recover vector and delivery mode from IRTE.
+	 */
         ASSERT(get_rte_index(rte) == offset);
-        vector = get_field_from_reg_u32(*entry,
+        vector = get_field_from_reg_u32(*(u32 *)entry.ptr,
                                         INT_REMAP_ENTRY_VECTOR_MASK,
                                         INT_REMAP_ENTRY_VECTOR_SHIFT);
-        delivery_mode = get_field_from_reg_u32(*entry,
+        delivery_mode = get_field_from_reg_u32(*(u32 *)entry.ptr,
                                                INT_REMAP_ENTRY_INTTYPE_MASK,
                                                INT_REMAP_ENTRY_INTTYPE_SHIFT);
     }
-    update_intremap_entry(entry, vector, delivery_mode, dest_mode, dest);
+    update_intremap_entry(&entry, vector, delivery_mode, dest_mode, dest);
 
     spin_unlock_irqrestore(lock, flags);
 
@@ -205,7 +305,7 @@ int __init amd_iommu_setup_ioapic_remapping(void)
 {
     struct IO_APIC_route_entry rte;
     unsigned long flags;
-    u32* entry;
+    struct irte entry;
     int apic, pin;
     u8 delivery_mode, dest, vector, dest_mode;
     u16 seg, bdf, req_id;
@@ -244,8 +344,8 @@ int __init amd_iommu_setup_ioapic_remapping(void)
             spin_lock_irqsave(lock, flags);
             offset = alloc_intremap_entry(seg, req_id, 1);
             BUG_ON(offset >= INTREMAP_ENTRIES);
-            entry = get_intremap_entry(iommu->seg, req_id, offset);
-            update_intremap_entry(entry, vector,
+            get_intremap_entry(iommu->seg, req_id, offset, &entry);
+            update_intremap_entry(&entry, vector,
                                   delivery_mode, dest_mode, dest);
             spin_unlock_irqrestore(lock, flags);
 
@@ -363,19 +463,25 @@ unsigned int amd_iommu_read_ioapic_from_ire(
 
     if ( !(reg & 1) && offset < INTREMAP_ENTRIES )
     {
+        struct irte entry;
         u16 bdf = ioapic_sbdf[IO_APIC_ID(apic)].bdf;
         u16 seg = ioapic_sbdf[IO_APIC_ID(apic)].seg;
         u16 req_id = get_intremap_requestor_id(seg, bdf);
-        const u32 *entry = get_intremap_entry(seg, req_id, offset);
 
+        get_intremap_entry(seg, req_id, offset, &entry);
         ASSERT(offset == (val & (INTREMAP_ENTRIES - 1)));
         val &= ~(INTREMAP_ENTRIES - 1);
-        val |= get_field_from_reg_u32(*entry,
-                                      INT_REMAP_ENTRY_INTTYPE_MASK,
-                                      INT_REMAP_ENTRY_INTTYPE_SHIFT) << 8;
-        val |= get_field_from_reg_u32(*entry,
-                                      INT_REMAP_ENTRY_VECTOR_MASK,
-                                      INT_REMAP_ENTRY_VECTOR_SHIFT);
+        if (entry.mode == IOMMU_GUEST_IR_LEGACY)
+        {
+            val |= get_field_from_reg_u32(*(u32 *)entry.ptr,
+                                          INT_REMAP_ENTRY_INTTYPE_MASK,
+                                          INT_REMAP_ENTRY_INTTYPE_SHIFT) << 8;
+            val |= get_field_from_reg_u32(*(u32 *)entry.ptr,
+                                          INT_REMAP_ENTRY_VECTOR_MASK,
+                                          INT_REMAP_ENTRY_VECTOR_SHIFT);
+        } else {
+            //SURAVEE: TODO: AVIC
+        }
     }
 
     return val;
@@ -386,7 +492,7 @@ static int update_intremap_entry_from_msi_msg(
     int *remap_index, const struct msi_msg *msg, u32 *data)
 {
     unsigned long flags;
-    u32* entry;
+    struct irte entry;
     u16 req_id, alias_id;
     u8 delivery_mode, dest, vector, dest_mode;
     spinlock_t *lock;
@@ -425,8 +531,8 @@ static int update_intremap_entry_from_msi_msg(
         *remap_index = offset;
     }
 
-    entry = get_intremap_entry(iommu->seg, req_id, offset);
-    update_intremap_entry(entry, vector, delivery_mode, dest_mode, dest);
+    get_intremap_entry(iommu->seg, req_id, offset, &entry);
+    update_intremap_entry(&entry, vector, delivery_mode, dest_mode, dest);
     spin_unlock_irqrestore(lock, flags);
 
     *data = (msg->data & ~(INTREMAP_ENTRIES - 1)) | offset;
@@ -540,12 +646,12 @@ void amd_iommu_read_msi_from_ire(
     const struct pci_dev *pdev = msi_desc->dev;
     u16 bdf = pdev ? PCI_BDF2(pdev->bus, pdev->devfn) : hpet_sbdf.bdf;
     u16 seg = pdev ? pdev->seg : hpet_sbdf.seg;
-    const u32 *entry;
+    struct irte entry;
 
     if ( IS_ERR_OR_NULL(_find_iommu_for_device(seg, bdf)) )
         return;
 
-    entry = get_intremap_entry(seg, get_dma_requestor_id(seg, bdf), offset);
+    get_intremap_entry(seg, get_dma_requestor_id(seg, bdf), offset, &entry);
 
     if ( msi_desc->msi_attrib.type == PCI_CAP_ID_MSI )
     {
@@ -556,12 +662,19 @@ void amd_iommu_read_msi_from_ire(
     }
 
     msg->data &= ~(INTREMAP_ENTRIES - 1);
-    msg->data |= get_field_from_reg_u32(*entry,
-                                        INT_REMAP_ENTRY_INTTYPE_MASK,
-                                        INT_REMAP_ENTRY_INTTYPE_SHIFT) << 8;
-    msg->data |= get_field_from_reg_u32(*entry,
-                                        INT_REMAP_ENTRY_VECTOR_MASK,
-                                        INT_REMAP_ENTRY_VECTOR_SHIFT);
+    if ( entry.mode == IOMMU_GUEST_IR_LEGACY )
+    {
+        msg->data |= get_field_from_reg_u32(*(u32 *)entry.ptr,
+                                            INT_REMAP_ENTRY_INTTYPE_MASK,
+                                            INT_REMAP_ENTRY_INTTYPE_SHIFT) << 8;
+        msg->data |= get_field_from_reg_u32(*(u32 *)entry.ptr,
+                                            INT_REMAP_ENTRY_VECTOR_MASK,
+                                            INT_REMAP_ENTRY_VECTOR_SHIFT);
+    }
+    else
+    {
+        //SURAVEE: TODO
+    }
 }
 
 int __init amd_iommu_free_intremap_table(
@@ -581,9 +694,11 @@ int __init amd_iommu_free_intremap_table(
 void* __init amd_iommu_alloc_intremap_table(unsigned long **inuse_map)
 {
     void *tb;
+
     tb = __alloc_amd_iommu_tables(INTREMAP_TABLE_ORDER);
     BUG_ON(tb == NULL);
     memset(tb, 0, PAGE_SIZE * (1UL << INTREMAP_TABLE_ORDER));
+
     *inuse_map = xzalloc_array(unsigned long, BITS_TO_LONGS(INTREMAP_ENTRIES));
     BUG_ON(*inuse_map == NULL);
     return tb;

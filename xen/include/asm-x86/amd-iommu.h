@@ -187,4 +187,16 @@ struct guest_iommu {
 
 extern bool_t iommuv2_enabled;
 
+enum iommu_intr_mode_type {
+    IOMMU_GUEST_IR_LEGACY,
+
+    /* This mode is not visible to users. It is used when
+     * we cannot fully enable GA and fallback to only support
+     * legacy interrupt remapping via 128-bit IRTE.
+     */
+    IOMMU_GUEST_IR_LEGACY_GA,
+    IOMMU_GUEST_IR_GA,
+};
+
+
 #endif /* _ASM_X86_64_AMD_IOMMU_H */
