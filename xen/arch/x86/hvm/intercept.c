@@ -248,14 +248,18 @@ int hvm_io_intercept(ioreq_t *p)
 
 struct hvm_io_handler *hvm_next_io_handler(struct domain *d)
 {
-    unsigned int i = d->arch.hvm_domain.io_handler_count++;
+    unsigned int i = d->arch.hvm_domain.io_handler_count;
 
-    if ( i == NR_IO_HANDLERS )
+    if ( !d->arch.hvm_domain.io_handler )
+        return NULL;
+
+    if ( i == NR_IO_HANDLERS - 1 )
     {
         domain_crash(d);
         return NULL;
     }
 
+    d->arch.hvm_domain.io_handler_count++;
     return &d->arch.hvm_domain.io_handler[i];
 }
 
