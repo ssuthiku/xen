@@ -45,6 +45,7 @@
 #include <asm/hvm/support.h>
 #include <asm/hvm/io.h>
 #include <asm/hvm/emulate.h>
+#include <asm/hvm/svm/amd-iommu-proto.h>
 #include <asm/hvm/svm/asid.h>
 #include <asm/hvm/svm/svm.h>
 #include <asm/hvm/svm/vmcb.h>
@@ -1176,11 +1177,20 @@ void svm_host_osvw_init()
 
 static int svm_domain_initialise(struct domain *d)
 {
+    if ( is_hvm_domain(d) )
+        /*
+         * This requires the hvm domain to be
+         * initialized first.
+         */
+        return guest_iommu_init(d);
+
     return 0;
 }
 
 static void svm_domain_destroy(struct domain *d)
 {
+    if ( is_hvm_domain(d) )
+        guest_iommu_destroy(d);
 }
 
 static int svm_vcpu_initialise(struct vcpu *v)

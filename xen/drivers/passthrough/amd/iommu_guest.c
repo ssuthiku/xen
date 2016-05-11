@@ -891,6 +891,12 @@ int guest_iommu_init(struct domain* d)
          !has_viommu(d) )
         return 0;
 
+    if ( d->arch.hvm_domain.io_handler == NULL )
+    {
+        AMD_IOMMU_DEBUG("Error: uninitalized hvm io handler\n");
+        return 1;
+    }
+
     iommu = xzalloc(struct guest_iommu);
     if ( !iommu )
     {
