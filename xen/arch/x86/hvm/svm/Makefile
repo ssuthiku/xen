@@ -1,4 +1,5 @@
 obj-y += asid.o
+obj-y += avic.o
 obj-y += emulate.o
 obj-bin-y += entry.o
 obj-y += intr.o

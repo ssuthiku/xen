@@ -30,6 +30,7 @@
 #include <asm/hvm/io.h>
 #include <asm/hvm/support.h>
 #include <asm/hvm/vlapic.h>
+#include <asm/hvm/svm/avic.h>
 #include <asm/hvm/svm/svm.h>
 #include <asm/hvm/svm/intr.h>
 #include <asm/hvm/nestedhvm.h> /* for nestedhvm_vcpu_in_guestmode */
@@ -75,11 +76,15 @@ static void svm_inject_extint(struct vcpu *v, int vector)
     vmcb->eventinj = event;
 }
 
+//SURAVEE: TODO: AVIC here
 static void svm_enable_intr_window(struct vcpu *v, struct hvm_intack intack)
 {
     struct vmcb_struct *vmcb = v->arch.hvm_svm.vmcb;
     uint32_t general1_intercepts = vmcb_get_general1_intercepts(vmcb);
     vintr_t intr;
+
+    if ( svm_avic )
+        return;
 
     ASSERT(intack.source != hvm_intsrc_none);
 

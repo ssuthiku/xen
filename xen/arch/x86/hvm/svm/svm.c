@@ -48,6 +48,7 @@
 #include <asm/hvm/svm/asid.h>
 #include <asm/hvm/svm/svm.h>
 #include <asm/hvm/svm/vmcb.h>
+#include <asm/hvm/svm/avic.h>
 #include <asm/hvm/svm/emulate.h>
 #include <asm/hvm/svm/intr.h>
 #include <asm/hvm/svm/svmdebug.h>
@@ -1010,6 +1011,10 @@ static void svm_ctxt_switch_from(struct vcpu *v)
     svm_tsc_ratio_save(v);
 
     svm_sync_vmcb(v);
+
+//SURAVEE: TODO: Check this
+    svm_avic_vcpu_load(v, 0, 0);
+
     svm_vmload(per_cpu(root_vmcb, cpu));
 
     /* Resume use of ISTs now that the host TR is reinstated. */
@@ -1049,6 +1054,9 @@ static void svm_ctxt_switch_to(struct vcpu *v)
     svm_lwp_load(v);
     svm_tsc_ratio_load(v);
 
+//SURAVEE: TODO: FIXME: Check this
+    svm_avic_vcpu_load(v, cpu, 1); 
+
     if ( cpu_has_rdtscp )
         wrmsrl(MSR_TSC_AUX, hvm_msr_tsc_aux(v));
 }
@@ -1083,7 +1091,8 @@ static void noreturn svm_do_resume(struct vcpu *v)
         hvm_asid_flush_vcpu(v);
     }
 
-    if ( !vcpu_guestmode && !vlapic_hw_disabled(vlapic) )
+    if ( !vcpu_guestmode && !vlapic_hw_disabled(vlapic) &&
+	 !svm_avic_vcpu_enabled(v) )
     {
         vintr_t intr;
 
@@ -1164,11 +1173,12 @@ void svm_host_osvw_init()
 
 static int svm_domain_initialise(struct domain *d)
 {
-    return 0;
+    return svm_avic_dom_init(d);
 }
 
 static void svm_domain_destroy(struct domain *d)
 {
+    svm_avic_dom_destroy(d);
 }
 
 static int svm_vcpu_initialise(struct vcpu *v)
@@ -1180,6 +1190,13 @@ static int svm_vcpu_initialise(struct vcpu *v)
     v->arch.ctxt_switch_to   = svm_ctxt_switch_to;
 
     v->arch.hvm_svm.launch_core = -1;
+
+    if ( (rc = svm_avic_init_vcpu(v)) != 0 )
+    {
+        dprintk(XENLOG_WARNING,
+                "Failed to initiazlize AVIC vcpu.\n");
+        return rc;
+    }
 
     if ( (rc = svm_create_vmcb(v)) != 0 )
     {
@@ -1200,6 +1217,7 @@ static int svm_vcpu_initialise(struct vcpu *v)
 
 static void svm_vcpu_destroy(struct vcpu *v)
 {
+    svm_avic_destroy_vcpu(v);
     vpmu_destroy(v);
     svm_destroy_vmcb(v);
     passive_domain_destroy(v);
@@ -1315,6 +1333,7 @@ static int svm_event_pending(struct vcpu *v)
     return vmcb->eventinj.fields.v;
 }
 
+//SURAVEE: TOODO: AVIC
 static void svm_cpu_dead(unsigned int cpu)
 {
     free_xenheap_page(per_cpu(hsa, cpu));
@@ -1323,6 +1342,7 @@ static void svm_cpu_dead(unsigned int cpu)
     per_cpu(root_vmcb, cpu) = NULL;
 }
 
+//SURAVEE: TOODO: AVIC
 static int svm_cpu_up_prepare(unsigned int cpu)
 {
     if ( ((per_cpu(hsa, cpu) == NULL) &&
@@ -1376,6 +1396,7 @@ static int svm_handle_osvw(struct vcpu *v, uint32_t msr, uint64_t *val, bool_t r
     return 0;
 }
 
+//SURAVEE: TOODO: AVIC
 static int svm_cpu_up(void)
 {
     uint64_t msr_content;
@@ -1464,6 +1485,7 @@ const struct hvm_function_table * __init start_svm(void)
     P(cpu_has_svm_decode, "DecodeAssists");
     P(cpu_has_pause_filter, "Pause-Intercept Filter");
     P(cpu_has_tsc_ratio, "TSC Rate MSR");
+    P(cpu_has_svm_avic, "AVIC");
 #undef P
 
     if ( !printed )
@@ -1472,6 +1494,18 @@ const struct hvm_function_table * __init start_svm(void)
     svm_function_table.hap_supported = !!cpu_has_svm_npt;
     svm_function_table.hap_capabilities = HVM_HAP_SUPERPAGE_2MB |
         ((cpuid_edx(0x80000001) & 0x04000000) ? HVM_HAP_SUPERPAGE_1GB : 0);
+
+    if ( !cpu_has_svm_avic )
+        svm_avic = 0;
+
+    if ( !svm_avic )
+    {
+        svm_function_table.deliver_posted_intr = NULL;
+    }
+    else
+    {
+        printk("SVM: AVIC enabled\n");
+    }
 
     return &svm_function_table;
 }
@@ -1809,6 +1843,10 @@ static int svm_msr_write_intercept(unsigned int msr, uint64_t msr_content)
 
     switch ( msr )
     {
+    case MSR_IA32_APICBASE:
+        if ( svm_avic )
+            svm_avic_update_vapic_bar(v, msr_content);
+	break;
     case MSR_IA32_SYSENTER_CS:
     case MSR_IA32_SYSENTER_ESP:
     case MSR_IA32_SYSENTER_EIP:
@@ -2283,6 +2321,11 @@ static struct hvm_function_table __initdata svm_function_table = {
     .tsc_scaling = {
         .max_ratio = ~TSC_RATIO_RSVD_BITS,
     },
+
+    /* AVIC */
+    .virtual_intr_delivery_enabled = svm_avic_enabled,
+    .deliver_posted_intr  = svm_avic_deliver_posted_intr,
+//    .process_isr          = svm_process_isr,
 };
 
 void svm_vmexit_handler(struct cpu_user_regs *regs)
@@ -2505,6 +2548,11 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
         u32 general1_intercepts = vmcb_get_general1_intercepts(vmcb);
         intr = vmcb_get_vintr(vmcb);
 
+        if ( svm_avic ) {
+            gdprintk(XENLOG_ERR, "AVIC VINTR:\n");
+                domain_crash(v->domain);
+        }
+
         intr.fields.irq = 0;
         general1_intercepts &= ~GENERAL1_INTERCEPT_VINTR;
 
@@ -2693,6 +2741,14 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
 
     case VMEXIT_PAUSE:
         svm_vmexit_do_pause(regs);
+        break;
+
+    case VMEXIT_AVIC_INCOMP_IPI:
+        svm_avic_vmexit_do_incomp_ipi(regs);
+        break;
+
+    case VMEXIT_AVIC_NOACCEL:
+        svm_avic_vmexit_do_noaccel(regs);
         break;
 
     default:
