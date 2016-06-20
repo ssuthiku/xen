@@ -36,8 +36,8 @@ union irte_ga_lo {
 
     /* For int remapping */
     struct {
-        u64 valid	: 1,
-            no_fault	: 1,
+        u64 enable	: 1,
+            supiopf	: 1,
             /* ------ */
             int_type	: 3,
             rq_eoi	: 1,
@@ -50,8 +50,8 @@ union irte_ga_lo {
 
     /* For guest vAPIC */
     struct {
-        u64 valid	: 1,
-            no_fault	: 1,
+        u64 enable	: 1,
+            supiopf	: 1,
             /* ------ */
             ga_log_intr	: 1,
             rsvd1	: 3,
@@ -175,16 +175,14 @@ static int get_intremap_entry(int seg, int bdf, int offset, struct irte *entry)
 
 static void free_intremap_entry(int seg, int bdf, int offset)
 {
-    if ( iommu_intr_mode == IOMMU_GUEST_IR_LEGACY )
-    {
-        struct irte entry;
+     struct irte entry;
 
-        get_intremap_entry(seg, bdf, offset, &entry);
-        if ( entry.mode == IOMMU_GUEST_IR_LEGACY )
-            memset(entry.ptr, 0, sizeof(u32));
-        else
-            memset(entry.ptr, 0, sizeof(struct irte_ga));
-    }
+     get_intremap_entry(seg, bdf, offset, &entry);
+     if ( entry.mode == IOMMU_GUEST_IR_LEGACY )
+         memset(entry.ptr, 0, sizeof(u32));
+     else
+         memset(entry.ptr, 0, sizeof(struct irte_ga));
+
     __clear_bit(offset, get_ivrs_mappings(seg)[bdf].intremap_inuse);
 }
 
@@ -215,9 +213,21 @@ static void update_intremap_entry(struct irte *entry, u8 vector, u8 int_type,
                                 INT_REMAP_ENTRY_VECTOR_MASK,
                                 INT_REMAP_ENTRY_VECTOR_SHIFT, (u32 *)entry->ptr);
     }
+    else if ( entry->mode == IOMMU_GUEST_IR_LEGACY_GA )
+    {
+        struct irte_ga *p = entry->ptr;
+
+	// SURAVEE TODO: Need mem synchronization
+	p->lo.val = 0;
+        p->lo.fields_remap.int_type = int_type;
+        p->lo.fields_remap.dm = dest_mode;
+        p->lo.fields_remap.destination = dest;
+        p->hi.fields.vector = vector;
+        p->lo.fields_remap.enable = 1;
+    }
     else
     {
-        //SURAVEE: TODO: AVIC
+        //SURAVEE: TODO AVIC
     }
 }
 
@@ -471,7 +481,7 @@ unsigned int amd_iommu_read_ioapic_from_ire(
         get_intremap_entry(seg, req_id, offset, &entry);
         ASSERT(offset == (val & (INTREMAP_ENTRIES - 1)));
         val &= ~(INTREMAP_ENTRIES - 1);
-        if (entry.mode == IOMMU_GUEST_IR_LEGACY)
+        if ( entry.mode == IOMMU_GUEST_IR_LEGACY )
         {
             val |= get_field_from_reg_u32(*(u32 *)entry.ptr,
                                           INT_REMAP_ENTRY_INTTYPE_MASK,
@@ -479,8 +489,18 @@ unsigned int amd_iommu_read_ioapic_from_ire(
             val |= get_field_from_reg_u32(*(u32 *)entry.ptr,
                                           INT_REMAP_ENTRY_VECTOR_MASK,
                                           INT_REMAP_ENTRY_VECTOR_SHIFT);
-        } else {
-            //SURAVEE: TODO: AVIC
+        }
+        else if ( entry.mode == IOMMU_GUEST_IR_LEGACY_GA )
+        {
+            struct irte_ga *p = entry.ptr;
+
+	    // SURAVEE TODO: Need mem synchronization
+            val |= p->lo.fields_remap.int_type << 8;
+            val |= p->hi.fields.vector;
+        }
+        else
+        {
+            //SURAVEE: TODO AVIC
         }
     }
 
@@ -671,9 +691,17 @@ void amd_iommu_read_msi_from_ire(
                                             INT_REMAP_ENTRY_VECTOR_MASK,
                                             INT_REMAP_ENTRY_VECTOR_SHIFT);
     }
+    else if ( entry.mode == IOMMU_GUEST_IR_LEGACY_GA )
+    {
+        struct irte_ga *p = entry.ptr;
+
+	// SURAVEE TODO: Need mem synchronization
+        msg->data |= p->lo.fields_remap.int_type << 8;
+        msg->data |= p->hi.fields.vector;
+    }
     else
     {
-        //SURAVEE: TODO
+        //SURAVEE: TODO AVIC
     }
 }
 

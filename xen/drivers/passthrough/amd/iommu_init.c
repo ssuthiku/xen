@@ -992,8 +992,63 @@ static void * __init allocate_ppr_log(struct amd_iommu *iommu)
                                 IOMMU_PPR_LOG_DEFAULT_ENTRIES, "PPR Log");
 }
 
+static void set_iommu_ga_control(struct amd_iommu *iommu, int enable)
+{
+    u32 entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+
+    if (enable)
+    {
+        iommu_set_bit(&entry, IOMMU_CONTROL_GA_ENABLE_SHIFT);
+
+        if ( iommu_intr_mode == IOMMU_GUEST_IR_VAPIC )
+        {
+            iommu_set_bit(&entry, IOMMU_CONTROL_GALOG_ENABLE_SHIFT);
+            iommu_set_bit(&entry, IOMMU_CONTROL_GAINT_ENABLE_SHIFT);
+            set_field_in_reg_u32(0x1, entry,
+                         IOMMU_CONTROL_GAM_ENABLE_MASK,
+                         IOMMU_CONTROL_GAM_ENABLE_SHIFT,
+                         &entry);
+            AMD_IOMMU_DEBUG("Guest Virtual APIC Enabled.\n");
+        }
+    }
+    else
+    {
+        iommu_clear_bit(&entry, IOMMU_CONTROL_GA_ENABLE_SHIFT);
+        iommu_clear_bit(&entry, IOMMU_CONTROL_GALOG_ENABLE_SHIFT);
+        iommu_clear_bit(&entry, IOMMU_CONTROL_GAINT_ENABLE_SHIFT);
+        set_field_in_reg_u32(0x0, entry,
+                     IOMMU_CONTROL_GAM_ENABLE_MASK,
+                     IOMMU_CONTROL_GAM_ENABLE_SHIFT,
+                     &entry);
+    }
+
+    writel(entry, iommu->mmio_base+IOMMU_CONTROL_MMIO_OFFSET);
+}
+
+static int __init amd_iommu_ga_init(struct amd_iommu *iommu)
+{
+    u8 gam = (iommu->features & IOMMU_EXT_FEATURE_GAMSUP_MASK) >>
+             IOMMU_EXT_FEATURE_GAMSUP_SHIFT;
+
+//SURAVEE: TODO: Hardcode for now:
+    gam = 0;
+
+    if ( gam == 1 )
+        iommu_intr_mode = IOMMU_GUEST_IR_VAPIC;
+    else
+        iommu_intr_mode = IOMMU_GUEST_IR_LEGACY_GA;
+
+    set_iommu_ga_control(iommu, 1);
+
+    AMD_IOMMU_DEBUG("DEBUG: %s: iommu_inter_mode=%#x.\n",
+		__func__, iommu_intr_mode);
+    return 0;
+}
+
 static int __init amd_iommu_init_one(struct amd_iommu *iommu)
 {
+    int ret = -ENODEV;
+
     if ( map_iommu_mmio_region(iommu) != 0 )
         goto error_out;
 
@@ -1011,6 +1066,13 @@ static int __init amd_iommu_init_one(struct amd_iommu *iommu)
     if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_PPRSUP_SHIFT) )
         if ( allocate_ppr_log(iommu) == NULL )
             goto error_out;
+
+    if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_GASUP_SHIFT) )
+    {
+        ret = amd_iommu_ga_init(iommu);
+        if ( ret )
+            goto error_out;
+    }
 
     if ( !set_iommu_interrupt_handler(iommu) )
         goto error_out;
@@ -1032,7 +1094,7 @@ static int __init amd_iommu_init_one(struct amd_iommu *iommu)
     return 0;
 
 error_out:
-    return -ENODEV;
+    return ret;
 }
 
 static void __init amd_iommu_init_cleanup(void)

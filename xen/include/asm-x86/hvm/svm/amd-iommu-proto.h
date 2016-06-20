@@ -286,4 +286,6 @@ static inline unsigned int iommu_next_level(const u32 *entry)
                                   IOMMU_PDE_NEXT_LEVEL_SHIFT);
 }
 
+extern enum iommu_intr_mode_type iommu_intr_mode;
+
 #endif /* _ASM_X86_64_AMD_IOMMU_PROTO_H */

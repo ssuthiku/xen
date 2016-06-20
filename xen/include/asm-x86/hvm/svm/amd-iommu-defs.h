@@ -343,8 +343,15 @@
 #define IOMMU_CONTROL_PPR_ENABLE_SHIFT			15
 #define IOMMU_CONTROL_GT_ENABLE_MASK			0x00010000
 #define IOMMU_CONTROL_GT_ENABLE_SHIFT			16
-#define IOMMU_CONTROL_RESTART_MASK			0x80000000
-#define IOMMU_CONTROL_RESTART_SHIFT			31
+
+#define IOMMU_CONTROL_GA_ENABLE_SHIFT			17
+#define IOMMU_CONTROL_GA_ENABLE_MASK			(1UL << IOMMU_CONTROL_GA_ENABLE_SHIFT)
+#define IOMMU_CONTROL_GAM_ENABLE_SHIFT			25
+#define IOMMU_CONTROL_GAM_ENABLE_MASK			(7UL << IOMMU_CONTROL_GAM_ENABLE_SHIFT)
+#define IOMMU_CONTROL_GALOG_ENABLE_SHIFT		28
+#define IOMMU_CONTROL_GALOG_ENABLE_MASK			(7UL << IOMMU_CONTROL_GALOG_ENABLE_SHIFT)
+#define IOMMU_CONTROL_GAINT_ENABLE_SHIFT		29
+#define IOMMU_CONTROL_GAINT_ENABLE_MASK			(1UL << IOMMU_CONTROL_GAINT_ENABLE_SHIFT)
 
 /* Exclusion Register */
 #define IOMMU_EXCLUSION_BASE_LOW_OFFSET		0x20
@@ -366,21 +373,23 @@
 
 /* Extended Feature Register*/
 #define IOMMU_EXT_FEATURE_MMIO_OFFSET                   0x30
-#define IOMMU_EXT_FEATURE_PREFSUP_SHIFT                 0x0
-#define IOMMU_EXT_FEATURE_PPRSUP_SHIFT                  0x1
-#define IOMMU_EXT_FEATURE_XTSUP_SHIFT                   0x2
-#define IOMMU_EXT_FEATURE_NXSUP_SHIFT                   0x3
-#define IOMMU_EXT_FEATURE_GTSUP_SHIFT                   0x4
-#define IOMMU_EXT_FEATURE_IASUP_SHIFT                   0x6
-#define IOMMU_EXT_FEATURE_GASUP_SHIFT                   0x7
-#define IOMMU_EXT_FEATURE_HESUP_SHIFT                   0x8
-#define IOMMU_EXT_FEATURE_PCSUP_SHIFT                   0x9
-#define IOMMU_EXT_FEATURE_HATS_SHIFT                    0x10
+#define IOMMU_EXT_FEATURE_PREFSUP_SHIFT                 0
+#define IOMMU_EXT_FEATURE_PPRSUP_SHIFT                  1
+#define IOMMU_EXT_FEATURE_XTSUP_SHIFT                   2
+#define IOMMU_EXT_FEATURE_NXSUP_SHIFT                   3
+#define IOMMU_EXT_FEATURE_GTSUP_SHIFT                   4
+#define IOMMU_EXT_FEATURE_IASUP_SHIFT                   6
+#define IOMMU_EXT_FEATURE_GASUP_SHIFT                   7
+#define IOMMU_EXT_FEATURE_HESUP_SHIFT                   8
+#define IOMMU_EXT_FEATURE_PCSUP_SHIFT                   9
+#define IOMMU_EXT_FEATURE_HATS_SHIFT                    10
 #define IOMMU_EXT_FEATURE_HATS_MASK                     0x00000C00
-#define IOMMU_EXT_FEATURE_GATS_SHIFT                    0x12
+#define IOMMU_EXT_FEATURE_GATS_SHIFT                    12
 #define IOMMU_EXT_FEATURE_GATS_MASK                     0x00003000
-#define IOMMU_EXT_FEATURE_GLXSUP_SHIFT                  0x14
+#define IOMMU_EXT_FEATURE_GLXSUP_SHIFT                  14
 #define IOMMU_EXT_FEATURE_GLXSUP_MASK                   0x0000C000
+#define IOMMU_EXT_FEATURE_GAMSUP_SHIFT                  21
+#define IOMMU_EXT_FEATURE_GAMSUP_MASK                   0x00700000
 
 #define IOMMU_EXT_FEATURE_PASMAX_SHIFT                  0x0
 #define IOMMU_EXT_FEATURE_PASMAX_MASK                   0x0000001F

@@ -195,7 +195,7 @@ enum iommu_intr_mode_type {
      * legacy interrupt remapping via 128-bit IRTE.
      */
     IOMMU_GUEST_IR_LEGACY_GA,
-    IOMMU_GUEST_IR_GA,
+    IOMMU_GUEST_IR_VAPIC,
 };
 
 
