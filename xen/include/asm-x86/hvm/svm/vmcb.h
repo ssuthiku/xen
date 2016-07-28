@@ -504,6 +504,7 @@ struct svm_domain {
     u32 ldr_mode;
     u32 avic_max_vcpu_id;
     bool_t avic_access_page_done;
+    struct page_info *bla;
     struct page_info *avic_log_ait_pg;
     struct page_info *avic_phy_ait_pg;
 };
