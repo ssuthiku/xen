@@ -25,6 +25,7 @@
 #include <xen/irq.h>
 #include <asm/amd-iommu.h>
 #include <asm/msi.h>
+#include <asm/hvm/svm/avic.h>
 #include <asm/hvm/svm/amd-iommu-proto.h>
 #include <asm-x86/fixmap.h>
 #include <mach_apic.h>
@@ -350,6 +351,35 @@ static void set_iommu_ppr_log_control(struct amd_iommu *iommu,
         AMD_IOMMU_DEBUG("PPR Log Enabled.\n");
 }
 
+static void set_iommu_ga_log_control(struct amd_iommu *iommu, int enable)
+{
+    u32 entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+
+    if ( enable && iommu_intr_mode == IOMMU_GUEST_IR_VAPIC )
+    {
+       iommu_set_bit(&entry, IOMMU_CONTROL_GA_LOG_ENABLE_SHIFT);
+       iommu_set_bit(&entry, IOMMU_CONTROL_GA_LOG_INT_SHIFT);
+       set_field_in_reg_u32(0x1, entry,
+                    IOMMU_CONTROL_GAM_ENABLE_MASK,
+                    IOMMU_CONTROL_GAM_ENABLE_SHIFT,
+                    &entry);
+       AMD_IOMMU_DEBUG("Guest Virtual APIC and GA Log Enabled.\n");
+    }
+    else
+    {
+        iommu_clear_bit(&entry, IOMMU_CONTROL_GA_LOG_ENABLE_SHIFT);
+        iommu_clear_bit(&entry, IOMMU_CONTROL_GA_LOG_INT_SHIFT);
+        set_field_in_reg_u32(0x0, entry,
+                     IOMMU_CONTROL_GAM_ENABLE_MASK,
+                     IOMMU_CONTROL_GAM_ENABLE_SHIFT,
+                     &entry);
+    }
+
+    writel(entry, iommu->mmio_base+IOMMU_CONTROL_MMIO_OFFSET);
+    if ( enable )
+        AMD_IOMMU_DEBUG("GA Log Enabled.\n");
+}
+
 /* read event log or ppr log from iommu ring buffer */
 static int iommu_read_log(struct amd_iommu *iommu,
                           struct ring_buffer *log,
@@ -358,7 +388,9 @@ static int iommu_read_log(struct amd_iommu *iommu,
 {
     u32 tail, head, *entry, tail_offest, head_offset;
 
-    BUG_ON(!iommu || ((log != &iommu->event_log) && (log != &iommu->ppr_log)));
+    BUG_ON(!iommu || ((log != &iommu->event_log) &&
+                      (log != &iommu->ppr_log) &&
+                      (log != &iommu->ga_log)));
     
     spin_lock(&log->lock);
 
@@ -404,7 +436,9 @@ static void iommu_reset_log(struct amd_iommu *iommu,
     int log_run, run_bit;
     int loop_count = 1000;
 
-    BUG_ON(!iommu || ((log != &iommu->event_log) && (log != &iommu->ppr_log)));
+    BUG_ON(!iommu || ((log != &iommu->event_log) &&
+                      (log != &iommu->ppr_log) &&
+                      (log != &iommu->ga_log)));
 
     run_bit = ( log == &iommu->event_log ) ?
         IOMMU_STATUS_EVENT_LOG_RUN_SHIFT :
@@ -728,6 +762,67 @@ static void iommu_check_ppr_log(struct amd_iommu *iommu)
     spin_unlock_irqrestore(&iommu->lock, flags);
 }
 
+#define IOMMU_GA_LOG_ENTRY_DEVID_MASK           0xFFFF
+#define IOMMU_GA_LOG_ENTRY_OPCODE_SHIFT         28
+#define IOMMU_GA_LOG_ENTRY_OPCODE_MASK          (0xF << IOMMU_GA_LOG_ENTRY_OPCODE_SHIFT)
+
+#define IOMMU_GA_LOG_ENTRY_GA_GUEST_NR		1
+
+void parse_ga_log_entry(struct amd_iommu *iommu, u32 entry[])
+{
+
+    u8 opcode = get_field_from_reg_u32(entry[1],
+                                    IOMMU_GA_LOG_ENTRY_OPCODE_MASK,
+                                    IOMMU_GA_LOG_ENTRY_OPCODE_SHIFT);
+
+    switch ( opcode )
+    {
+    case IOMMU_GA_LOG_ENTRY_GA_GUEST_NR:
+	svm_iommu_ga_log_notifier(entry[0]);
+        break;
+    default:
+        AMD_IOMMU_DEBUG("Unknown ga_log entry opcode %#x\n", opcode);
+    }
+
+    memset(entry, 0, sizeof(ga_log_entry_t));
+}
+
+static void iommu_check_ga_log(struct amd_iommu *iommu)
+{
+    u32 entry;
+    unsigned long flags;
+
+    /* RW1C interrupt status bit */
+    writel(IOMMU_STATUS_GA_LOG_INT_MASK,
+           iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
+
+    iommu_read_log(iommu, &iommu->ga_log,
+                   sizeof(ga_log_entry_t), parse_ga_log_entry);
+
+    spin_lock_irqsave(&iommu->lock, flags);
+
+    /* Check event overflow. */
+    entry = readl(iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
+    if ( iommu_get_bit(entry, IOMMU_STATUS_GA_LOG_OVERFLOW_SHIFT) )
+        iommu_reset_log(iommu, &iommu->ga_log, set_iommu_ga_log_control);
+    else
+    {
+        entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+        if ( !(entry & IOMMU_CONTROL_GA_LOG_INT_MASK) )
+        {
+            entry |= IOMMU_CONTROL_GA_LOG_INT_MASK;
+            writel(entry, iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+            /*
+             * Re-schedule the tasklet to handle eventual log entries added
+             * between reading the log above and re-enabling the interrupt.
+             */
+            tasklet_schedule(&amd_iommu_irq_tasklet);
+        }
+    }
+
+    spin_unlock_irqrestore(&iommu->lock, flags);
+}
+
 static void do_amd_iommu_irq(unsigned long data)
 {
     struct amd_iommu *iommu;
@@ -748,6 +843,9 @@ static void do_amd_iommu_irq(unsigned long data)
 
         if ( iommu->ppr_log.buffer != NULL )
             iommu_check_ppr_log(iommu);
+
+        if ( iommu->ga_log.buffer != NULL )
+            iommu_check_ga_log(iommu);
     }
 }
 
@@ -761,12 +859,13 @@ static void iommu_interrupt_handler(int irq, void *dev_id,
     spin_lock_irqsave(&iommu->lock, flags);
 
     /*
-     * Silence interrupts from both event and PPR by clearing the
+     * Silence interrupts from event, PPR, and GA logs by clearing the
      * enable logging bits in the control register
      */
     entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
     iommu_clear_bit(&entry, IOMMU_CONTROL_EVENT_LOG_INT_SHIFT);
     iommu_clear_bit(&entry, IOMMU_CONTROL_PPR_LOG_INT_SHIFT);
+    iommu_clear_bit(&entry, IOMMU_CONTROL_GA_LOG_INT_SHIFT);
     writel(entry, iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
 
     spin_unlock_irqrestore(&iommu->lock, flags);
@@ -900,6 +999,8 @@ static void enable_iommu(struct amd_iommu *iommu)
     if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_PPRSUP_SHIFT) )
         set_iommu_ppr_log_control(iommu, IOMMU_CONTROL_ENABLED);
 
+    set_iommu_ga_log_control(iommu, IOMMU_CONTROL_ENABLED);
+
     if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_GTSUP_SHIFT) )
         set_iommu_guest_translation_control(iommu, IOMMU_CONTROL_ENABLED);
 
@@ -992,56 +1093,71 @@ static void * __init allocate_ppr_log(struct amd_iommu *iommu)
                                 IOMMU_PPR_LOG_DEFAULT_ENTRIES, "PPR Log");
 }
 
-static void set_iommu_ga_control(struct amd_iommu *iommu, int enable)
+static void __init free_ga_log(struct amd_iommu *iommu)
 {
-    u32 entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+    deallocate_ring_buffer(&iommu->ga_log);
 
-    if (enable)
-    {
-        iommu_set_bit(&entry, IOMMU_CONTROL_GA_ENABLE_SHIFT);
+    if (iommu->ga_log_tail)
+        free_xenheap_pages(iommu->ga_log_tail, get_order_from_bytes(
+                                                       sizeof(ga_log_entry_t)));
+}
 
-        if ( iommu_intr_mode == IOMMU_GUEST_IR_VAPIC )
-        {
-            iommu_set_bit(&entry, IOMMU_CONTROL_GALOG_ENABLE_SHIFT);
-            iommu_set_bit(&entry, IOMMU_CONTROL_GAINT_ENABLE_SHIFT);
-            set_field_in_reg_u32(0x1, entry,
-                         IOMMU_CONTROL_GAM_ENABLE_MASK,
-                         IOMMU_CONTROL_GAM_ENABLE_SHIFT,
-                         &entry);
-            AMD_IOMMU_DEBUG("Guest Virtual APIC Enabled.\n");
-        }
-    }
-    else
+static int __init amd_iommu_ga_log_init(struct amd_iommu *iommu)
+{
+    int ret;
+    u64 entry;
+
+    if ( !allocate_ring_buffer(&iommu->ga_log, sizeof(ga_log_entry_t),
+                               IOMMU_GA_LOG_DEFAULT_ENTRIES, "GA Log") )
     {
-        iommu_clear_bit(&entry, IOMMU_CONTROL_GA_ENABLE_SHIFT);
-        iommu_clear_bit(&entry, IOMMU_CONTROL_GALOG_ENABLE_SHIFT);
-        iommu_clear_bit(&entry, IOMMU_CONTROL_GAINT_ENABLE_SHIFT);
-        set_field_in_reg_u32(0x0, entry,
-                     IOMMU_CONTROL_GAM_ENABLE_MASK,
-                     IOMMU_CONTROL_GAM_ENABLE_SHIFT,
-                     &entry);
+        ret =  -ENOMEM;
+        goto err_out;
     }
 
-    writel(entry, iommu->mmio_base+IOMMU_CONTROL_MMIO_OFFSET);
+    iommu->ga_log_tail = alloc_xenheap_pages(get_order_from_bytes(
+                                                  sizeof(ga_log_entry_t)), 0);
+    if ( !iommu->ga_log_tail )
+    {
+        ret =  -ENOMEM;
+        goto err_out;
+    }
+
+    entry = (u64)((__pa(iommu->ga_log.buffer) & IOMMU_GA_LOG_BASE_ADDR_MASK) |
+                  IOMMU_GA_LOG_SIZE_512);
+    writel(entry, iommu->mmio_base + IOMMU_GA_LOG_BASE_ADDR_MMIO_OFFSET);
+
+    entry = (u64)(__pa(iommu->ga_log_tail) & IOMMU_GA_LOG_TAIL_ADDR_MASK);
+    writel(entry, iommu->mmio_base + IOMMU_GA_LOG_TAIL_ADDR_MMIO_OFFSET);
+
+    return 0;
+err_out:
+    free_ga_log(iommu);
+    return ret;
 }
 
 static int __init amd_iommu_ga_init(struct amd_iommu *iommu)
 {
+    u32 entry;
     u8 gam = (iommu->features & IOMMU_EXT_FEATURE_GAMSUP_MASK) >>
              IOMMU_EXT_FEATURE_GAMSUP_SHIFT;
 
-//SURAVEE: TODO: Hardcode for now:
-    gam = 0;
+    entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+    iommu_set_bit(&entry, IOMMU_CONTROL_GA_ENABLE_SHIFT);
+    writel(entry, iommu->mmio_base+IOMMU_CONTROL_MMIO_OFFSET);
+    iommu_intr_mode = IOMMU_GUEST_IR_LEGACY_GA;
 
     if ( gam == 1 )
-        iommu_intr_mode = IOMMU_GUEST_IR_VAPIC;
-    else
-        iommu_intr_mode = IOMMU_GUEST_IR_LEGACY_GA;
+    {
+        int ret = amd_iommu_ga_log_init(iommu);
 
-    set_iommu_ga_control(iommu, 1);
+        if (ret)
+            return ret;
+
+        iommu_intr_mode = IOMMU_GUEST_IR_VAPIC;
+    }
 
     AMD_IOMMU_DEBUG("DEBUG: %s: iommu_inter_mode=%#x.\n",
-		__func__, iommu_intr_mode);
+                    __func__, iommu_intr_mode);
     return 0;
 }
 
@@ -1376,6 +1492,8 @@ static void disable_iommu(struct amd_iommu *iommu)
 
     if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_PPRSUP_SHIFT) )
         set_iommu_ppr_log_control(iommu, IOMMU_CONTROL_DISABLED);
+
+    set_iommu_ga_log_control(iommu, IOMMU_CONTROL_DISABLED);
 
     if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_GTSUP_SHIFT) )
         set_iommu_guest_translation_control(iommu, IOMMU_CONTROL_DISABLED);

@@ -189,6 +189,8 @@ static void free_intremap_entry(int seg, int bdf, int offset)
 static void update_intremap_entry(struct irte *entry, u8 vector, u8 int_type,
                                   u8 dest_mode, u8 dest)
 {
+printk("DEBUG: %s: int_type=%u\n", __func__, int_type);
+
     if ( entry->mode == IOMMU_GUEST_IR_LEGACY )
     {
         set_field_in_reg_u32(IOMMU_CONTROL_ENABLED, 0,
@@ -213,7 +215,11 @@ static void update_intremap_entry(struct irte *entry, u8 vector, u8 int_type,
                                 INT_REMAP_ENTRY_VECTOR_MASK,
                                 INT_REMAP_ENTRY_VECTOR_SHIFT, (u32 *)entry->ptr);
     }
-    else if ( entry->mode == IOMMU_GUEST_IR_LEGACY_GA )
+    /* We only support fixed type in vAPIC. */
+    else if ( entry->mode == IOMMU_GUEST_IR_LEGACY_GA || 
+              entry->mode == IOMMU_GUEST_IR_VAPIC)
+//SURAVEE: HACK: This break non-AVIC mode
+//              (entry->mode == IOMMU_GUEST_IR_VAPIC && int_type != 0) )
     {
         struct irte_ga *p = entry->ptr;
 
@@ -225,9 +231,19 @@ static void update_intremap_entry(struct irte *entry, u8 vector, u8 int_type,
         p->hi.fields.vector = vector;
         p->lo.fields_remap.enable = 1;
     }
+//    else if ( entry->mode == IOMMU_GUEST_IR_VAPIC )
     else
     {
-        //SURAVEE: TODO AVIC
+        struct irte_ga *p = entry->ptr;
+
+	// SURAVEE TODO: Need mem synchronization
+	p->lo.val = 0;
+        p->lo.fields_vapic.ga_log_intr = 1;
+        p->lo.fields_vapic.guest_mode = 1;
+        p->lo.fields_vapic.destination = dest;
+        p->hi.fields.vector = vector;
+/* SURAVEE: We do not enable this yet until we set up the rest of the stuff */
+        p->lo.fields_vapic.enable = 0;
     }
 }
 
@@ -500,7 +516,12 @@ unsigned int amd_iommu_read_ioapic_from_ire(
         }
         else
         {
-            //SURAVEE: TODO AVIC
+            struct irte_ga *p = entry.ptr;
+
+	    // SURAVEE TODO: Need mem synchronization
+            /* Only support fixed type interrupt for AVIC */
+            val |= 0; 
+            val |= p->hi.fields.vector;
         }
     }
 
@@ -701,7 +722,12 @@ void amd_iommu_read_msi_from_ire(
     }
     else
     {
-        //SURAVEE: TODO AVIC
+        struct irte_ga *p = entry.ptr;
+
+	// SURAVEE TODO: Need mem synchronization
+        /* Only support fixed type interrupt for AVIC */
+        msg->data |= 0; 
+        msg->data|= p->hi.fields.vector;
     }
 }
 

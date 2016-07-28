@@ -51,6 +51,12 @@ typedef struct dev_entry
 {
     uint32_t data[8];
 } dev_entry_t;
+
+typedef struct ga_log_entry
+{
+    uint32_t data[2];
+} ga_log_entry_t;
+
 #pragma pack()
 
 struct table_struct {
@@ -97,6 +103,8 @@ struct amd_iommu {
     struct ring_buffer cmd_buffer;
     struct ring_buffer event_log;
     struct ring_buffer ppr_log;
+    struct ring_buffer ga_log;
+    void *ga_log_tail;
 
     int exclusion_enable;
     int exclusion_allow_all;

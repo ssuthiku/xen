@@ -757,8 +757,8 @@ static void guest_iommu_mmio_write64(struct guest_iommu *iommu,
                IOMMU_STATUS_COMP_WAIT_INT_MASK |
                IOMMU_STATUS_PPR_LOG_OVERFLOW_MASK |
                IOMMU_STATUS_PPR_LOG_INT_MASK |
-               IOMMU_STATUS_GAPIC_LOG_OVERFLOW_MASK |
-               IOMMU_STATUS_GAPIC_LOG_INT_MASK;
+               IOMMU_STATUS_GA_LOG_OVERFLOW_MASK |
+               IOMMU_STATUS_GA_LOG_INT_MASK;
         u64_to_reg(&iommu->reg_status, reg_to_u64(iommu->reg_status) & ~val);
         break;
 

@@ -507,6 +507,12 @@ struct svm_domain {
     struct page_info *bla;
     struct page_info *avic_log_ait_pg;
     struct page_info *avic_phy_ait_pg;
+
+    /* List of pass-through devices */
+    struct {
+        spinlock_t lock;
+        struct list_head dev_list;
+    } vapic_dev_list;
 };
 
 struct arch_svm_struct {

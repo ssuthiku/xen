@@ -666,3 +666,9 @@ void svm_avic_vmexit_do_noaccel(struct cpu_user_regs *regs)
 
     return;
 }
+
+/*SURAVEE TODO */
+int svm_iommu_ga_log_notifier(u32 ga_tag)
+{
+    return 0;
+}

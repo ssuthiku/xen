@@ -118,6 +118,8 @@ static void amd_iommu_setup_domain_device(
     u8 bus = pdev->bus;
     const struct domain_iommu *hd = dom_iommu(domain);
 
+printk("DEBUG: %s\n", __func__);
+
     BUG_ON( !hd->arch.root_table || !hd->arch.paging_mode ||
             !iommu->dev_table.buffer );
 
@@ -191,6 +193,7 @@ static int __hwdom_init amd_iommu_setup_hwdom_device(
         return -ENODEV;
     }
 
+printk("DEBUG: %s\n", __func__);
     amd_iommu_setup_domain_device(pdev->domain, iommu, devfn, pdev);
     return 0;
 }
@@ -359,12 +362,31 @@ void amd_iommu_disable_domain_device(struct domain *domain,
         disable_ats_device(pdev);
 }
 
-static int reassign_device(struct domain *source, struct domain *target,
+//SURAVEE: TODO:
+// Here is where we do the device assignment.
+// We need to set up the vAPIC support in IOMMU here.
+static int amd_iommu_setup_device_vapic(struct amd_iommu *iommu, struct domain *dom,
+                                        struct pci_dev *pdev)
+{
+    if ( iommu_intr_mode != IOMMU_GUEST_IR_VAPIC )
+        return 0;
+
+printk("DEBUG: %s\n", __func__);   
+//    /* We need to keep track of the device to enable GA mode. */
+//    struct svm_domain *d = dom->arch.hvm_domain.svm;
+
+    return 0;
+}
+
+static int amd_iommu_reassign_device(struct domain *source, struct domain *target,
                            u8 devfn, struct pci_dev *pdev)
 {
     struct amd_iommu *iommu;
-    int bdf;
+    int bdf, ret;
     struct domain_iommu *t = dom_iommu(target);
+
+printk("DEBUG: %s: devfn=%#x src=%#x, tgt=%#x\n",
+	__func__, devfn, source->domain_id, target->domain_id);
 
     bdf = PCI_BDF2(pdev->bus, pdev->devfn);
     iommu = find_iommu_for_device(pdev->seg, bdf);
@@ -390,12 +412,16 @@ static int reassign_device(struct domain *source, struct domain *target,
     if ( t->arch.root_table == NULL )
         allocate_domain_resources(t);
 
+    ret = amd_iommu_setup_device_vapic(iommu, target, pdev);
+
+printk("DEBUG: %s\n", __func__);
     amd_iommu_setup_domain_device(target, iommu, devfn, pdev);
+
     AMD_IOMMU_DEBUG("Re-assign %04x:%02x:%02x.%u from dom%d to dom%d\n",
                     pdev->seg, pdev->bus, PCI_SLOT(devfn), PCI_FUNC(devfn),
                     source->domain_id, target->domain_id);
 
-    return 0;
+    return ret;
 }
 
 static int amd_iommu_assign_device(struct domain *d, u8 devfn,
@@ -405,6 +431,8 @@ static int amd_iommu_assign_device(struct domain *d, u8 devfn,
     struct ivrs_mappings *ivrs_mappings = get_ivrs_mappings(pdev->seg);
     int bdf = PCI_BDF2(pdev->bus, devfn);
     int req_id = get_dma_requestor_id(pdev->seg, bdf);
+
+printk("DEBUG: %s: devfn=%#x\n", __func__, devfn);
 
     if ( ivrs_mappings[req_id].unity_map_enable )
     {
@@ -416,7 +444,7 @@ static int amd_iommu_assign_device(struct domain *d, u8 devfn,
             ivrs_mappings[req_id].read_permission);
     }
 
-    return reassign_device(hardware_domain, d, devfn, pdev);
+    return amd_iommu_reassign_device(hardware_domain, d, devfn, pdev);
 }
 
 static void deallocate_next_page_table(struct page_info *pg, int level)
@@ -493,6 +521,7 @@ static int amd_iommu_add_device(u8 devfn, struct pci_dev *pdev)
     if ( !pdev->domain )
         return -EINVAL;
 
+printk("DEBUG: %s: devfn=%#x\n", __func__, devfn);
     bdf = PCI_BDF2(pdev->bus, pdev->devfn);
     iommu = find_iommu_for_device(pdev->seg, bdf);
     if ( !iommu )
@@ -504,6 +533,7 @@ static int amd_iommu_add_device(u8 devfn, struct pci_dev *pdev)
         return -ENODEV;
     }
 
+printk("DEBUG: %s\n", __func__);
     amd_iommu_setup_domain_device(pdev->domain, iommu, devfn, pdev);
     return 0;
 }
@@ -515,6 +545,8 @@ static int amd_iommu_remove_device(u8 devfn, struct pci_dev *pdev)
     if ( !pdev->domain )
         return -EINVAL;
 
+printk("DEBUG: %s: devfn=%#x\n", __func__, devfn);
+ 
     bdf = PCI_BDF2(pdev->bus, pdev->devfn);
     iommu = find_iommu_for_device(pdev->seg, bdf);
     if ( !iommu )
@@ -617,13 +649,13 @@ const struct iommu_ops amd_iommu_ops = {
     .init = amd_iommu_domain_init,
     .hwdom_init = amd_iommu_hwdom_init,
     .add_device = amd_iommu_add_device,
-    .remove_device = amd_iommu_remove_device,
     .assign_device  = amd_iommu_assign_device,
+    .reassign_device = amd_iommu_reassign_device,
+    .remove_device = amd_iommu_remove_device,
     .teardown = amd_iommu_domain_destroy,
     .map_page = amd_iommu_map_page,
     .unmap_page = amd_iommu_unmap_page,
     .free_page_table = deallocate_page_table,
-    .reassign_device = reassign_device,
     .get_device_group_id = amd_iommu_group_id,
     .update_ire_from_apic = amd_iommu_ioapic_update_ire,
     .update_ire_from_msi = amd_iommu_msi_msg_update_ire,

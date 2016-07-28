@@ -46,4 +46,6 @@ static inline int svm_avic_enabled(void)
     return svm_avic;
 }
 
+int svm_iommu_ga_log_notifier(u32 ga_tag);
+
 #endif /* _SVM_AVIC_H_ */
