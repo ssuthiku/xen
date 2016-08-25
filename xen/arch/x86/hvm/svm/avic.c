@@ -18,6 +18,7 @@
 #define AVIC_DOORBELL           0xc001011b
 #define AVIC_HPA_MASK           ~((0xFFFULL << 52) || 0xFFF)
 #define AVIC_APIC_BAR_MASK      0xFFFFFFFFFF000ULL
+#define AVIC_UNACCEL_ACCESS_OFFSET_MASK    0xFF0
 
 bool_t svm_avic = 0;
 boolean_param("svm-avic", svm_avic);
@@ -214,4 +215,282 @@ int svm_avic_init_vmcb(struct vcpu *v)
     vmcb->_vintr.fields.avic_enable = 1;
 
     return 0;
+}
+
+/***************************************************************
+ * AVIC INCOMP IPI VMEXIT
+ */
+void svm_avic_vmexit_do_incomp_ipi(struct cpu_user_regs *regs)
+{
+    struct vcpu *v = current;
+    struct vmcb_struct *vmcb = v->arch.hvm_svm.vmcb;
+    u32 icrh = vmcb->exitinfo1 >> 32;
+    u32 icrl = vmcb->exitinfo1;
+    u32 id = vmcb->exitinfo2 >> 32;
+    u32 index = vmcb->exitinfo2 && 0xFF;
+
+    dprintk(XENLOG_DEBUG, "SVM: %s: cpu=%#x, vcpu=%#x, "
+           "icrh:icrl=%#010x:%08x, id=%u, index=%u\n",
+           __func__, v->processor, v->vcpu_id, icrh, icrl, id, index);
+
+    switch ( id )
+    {
+    case AVIC_INCMP_IPI_ERR_INVALID_INT_TYPE:
+        /*
+         * AVIC hardware handles the generation of
+         * IPIs when the specified Message Type is Fixed
+         * (also known as fixed delivery mode) and
+         * the Trigger Mode is edge-triggered. The hardware
+         * also supports self and broadcast delivery modes
+         * specified via the Destination Shorthand(DSH)
+         * field of the ICRL. Logical and physical APIC ID
+         * formats are supported. All other IPI types cause
+         * a #VMEXIT, which needs to emulated.
+         */
+        vlapic_reg_write(v, APIC_ICR2, icrh);
+        vlapic_reg_write(v, APIC_ICR, icrl);
+        break;
+    case AVIC_INCMP_IPI_ERR_TARGET_NOT_RUN:
+    {
+        /*
+         * At this point, we expect that the AVIC HW has already
+         * set the appropriate IRR bits on the valid target
+         * vcpus. So, we just need to kick the appropriate vcpu.
+         */
+        struct vcpu *c;
+        struct domain *d = v->domain;
+        uint32_t dest = GET_xAPIC_DEST_FIELD(icrh);
+        uint32_t short_hand = icrl & APIC_SHORT_MASK;
+        bool_t dest_mode = !!(icrl & APIC_DEST_MASK);
+
+        for_each_vcpu ( d, c )
+        {
+            if ( vlapic_match_dest(vcpu_vlapic(c), vcpu_vlapic(v),
+                                   short_hand, dest, dest_mode) )
+            {
+                vcpu_kick(c);
+                break;
+            }
+        }
+        break;
+    }
+    case AVIC_INCMP_IPI_ERR_INV_TARGET:
+        dprintk(XENLOG_ERR,
+                "SVM: %s: Invalid IPI target (icr=%#08x:%08x, idx=%u)\n",
+                __func__, icrh, icrl, index);
+        break;
+    case AVIC_INCMP_IPI_ERR_INV_BK_PAGE:
+        dprintk(XENLOG_ERR,
+                "SVM: %s: Invalid bk page (icr=%#08x:%08x, idx=%u)\n",
+                __func__, icrh, icrl, index);
+        break;
+    default:
+        dprintk(XENLOG_ERR, "SVM: %s: Unknown IPI interception\n", __func__);
+    }
+}
+
+/***************************************************************
+ * AVIC NOACCEL VMEXIT
+ */
+#define GET_APIC_LOGICAL_ID(x)        (((x) >> 24) & 0xFFu)
+
+static struct svm_avic_log_ait_entry *
+avic_get_logical_id_entry(struct vcpu *v, u32 ldr, bool flat)
+{
+    int index;
+    struct svm_avic_log_ait_entry *avic_log_ait;
+    struct svm_domain *d = &v->domain->arch.hvm_domain.svm;
+    int dlid = GET_APIC_LOGICAL_ID(ldr);
+
+    if ( !dlid )
+        return NULL;
+
+    if ( flat )
+    {
+        index = ffs(dlid) - 1;
+        if ( index > 7 )
+            return NULL;
+    }
+    else
+    {
+        int cluster = (dlid & 0xf0) >> 4;
+        int apic = ffs(dlid & 0x0f) - 1;
+
+        if ((apic < 0) || (apic > 7) || (cluster >= 0xf))
+            return NULL;
+        index = (cluster << 2) + apic;
+    }
+
+    avic_log_ait = mfn_to_virt(d->avic_log_ait_mfn);
+
+    return &avic_log_ait[index];
+}
+
+static int avic_ldr_write(struct vcpu *v, u8 g_phy_id, u32 ldr, bool valid)
+{
+    bool flat;
+    struct svm_avic_log_ait_entry *entry, new_entry;
+
+    flat = *avic_get_bk_page_entry(v, APIC_DFR) == APIC_DFR_FLAT;
+    entry = avic_get_logical_id_entry(v, ldr, flat);
+    if (!entry)
+        return -EINVAL;
+
+    new_entry = *entry;
+    smp_rmb();
+    new_entry.guest_phy_apic_id = g_phy_id;
+    new_entry.valid = valid;
+    *entry = new_entry;
+    smp_wmb();
+
+    return 0;
+}
+
+static int avic_handle_ldr_update(struct vcpu *v)
+{
+    int ret = 0;
+    struct svm_domain *d = &v->domain->arch.hvm_domain.svm;
+    u32 ldr = *avic_get_bk_page_entry(v, APIC_LDR);
+    u32 apic_id = (*avic_get_bk_page_entry(v, APIC_ID) >> 24);
+
+    if ( !ldr )
+        return 1;
+
+    ret = avic_ldr_write(v, apic_id, ldr, true);
+    if (ret && d->ldr_reg)
+    {
+        avic_ldr_write(v, 0, d->ldr_reg, false);
+        d->ldr_reg = 0;
+    }
+    else
+    {
+        d->ldr_reg = ldr;
+    }
+
+    return ret;
+}
+
+static int avic_handle_apic_id_update(struct vcpu *v, bool init)
+{
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+    struct svm_domain *d = &v->domain->arch.hvm_domain.svm;
+    u32 apic_id_reg = *avic_get_bk_page_entry(v, APIC_ID);
+    u32 id = (apic_id_reg >> 24) & 0xff;
+   struct svm_avic_phy_ait_entry *old, *new;
+
+   old = s->avic_phy_id_cache; 
+   new = avic_get_phy_ait_entry(v, id);
+   if ( !new || !old )
+       return 0;
+
+   /* We need to move physical_id_entry to new offset */
+   *new = *old;
+   *((u64 *)old) = 0ULL;
+   s->avic_phy_id_cache = new;
+
+    /*
+     * Also update the guest physical APIC ID in the logical
+     * APIC ID table entry if already setup the LDR.
+     */
+    if ( d->ldr_reg )
+        avic_handle_ldr_update(v);
+
+    return 0;
+}
+
+static int avic_handle_dfr_update(struct vcpu *v)
+{
+    struct svm_domain *d = &v->domain->arch.hvm_domain.svm;
+    u32 dfr = *avic_get_bk_page_entry(v, APIC_DFR);
+    u32 mod = (dfr >> 28) & 0xf;
+
+    /*
+     * We assume that all local APICs are using the same type.
+     * If this changes, we need to flush the AVIC logical
+     * APID id table.
+     */
+    if ( d->ldr_mode == mod )
+        return 0;
+
+    clear_domain_page(_mfn(d->avic_log_ait_mfn));
+    d->ldr_mode = mod;
+    if (d->ldr_reg)
+        avic_handle_ldr_update(v);
+    return 0;
+}
+
+static int avic_unaccel_trap_write(struct vcpu *v)
+{
+    struct vmcb_struct *vmcb = v->arch.hvm_svm.vmcb;
+    u32 offset = vmcb->exitinfo1 & AVIC_UNACCEL_ACCESS_OFFSET_MASK;
+    u32 reg = *avic_get_bk_page_entry(v, offset);
+
+    switch ( offset ) {
+    case APIC_ID:
+        if ( avic_handle_apic_id_update(v, false) )
+            return 0;
+        break;
+    case APIC_LDR:
+        if ( avic_handle_ldr_update(v) )
+            return 0;
+        break;
+    case APIC_DFR:
+        avic_handle_dfr_update(v);
+        break;
+    default:
+        break;
+    }
+
+    vlapic_reg_write(v, offset, reg);
+
+    return 1;
+}
+
+void svm_avic_vmexit_do_noaccel(struct cpu_user_regs *regs)
+{
+    struct vcpu *v = current;
+    struct vmcb_struct *vmcb = v->arch.hvm_svm.vmcb;
+    u32 offset = vmcb->exitinfo1 & 0xFF0;
+    u32 rw = (vmcb->exitinfo1 >> 32) & 0x1;
+    u32 vector = vmcb->exitinfo2 & 0xFFFFFFFF;
+
+    dprintk(XENLOG_DEBUG,
+           "SVM: %s: offset=%#x, rw=%#x, vector=%#x, vcpu_id=%#x, cpu=%#x\n",
+           __func__, offset, rw, vector, v->vcpu_id, v->processor);
+
+    switch(offset)
+    {
+    case APIC_ID:
+    case APIC_EOI:
+    case APIC_RRR:
+    case APIC_LDR:
+    case APIC_DFR:
+    case APIC_SPIV:
+    case APIC_ESR:
+    case APIC_ICR:
+    case APIC_LVTT:
+    case APIC_LVTTHMR:
+    case APIC_LVTPC:
+    case APIC_LVT0:
+    case APIC_LVT1:
+    case APIC_LVTERR:
+    case APIC_TMICT:
+    case APIC_TDCR:
+        /* Handling Trap */
+        if ( !rw )
+            /* Trap read should never happens */
+            BUG();
+        avic_unaccel_trap_write(v);
+        break;
+    default:
+        /* Handling Fault */
+        if ( !rw )
+            *avic_get_bk_page_entry(v, offset) = vlapic_read_aligned(
+                                                        vcpu_vlapic(v), offset);
+
+        hvm_mem_access_emulate_one(EMUL_KIND_NORMAL, TRAP_invalid_op,
+                                       HVM_DELIVER_NO_ERROR_CODE);
+    }
+
+    return;
 }

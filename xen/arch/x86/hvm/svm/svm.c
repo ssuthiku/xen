@@ -2710,6 +2710,14 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
         svm_vmexit_do_pause(regs);
         break;
 
+    case VMEXIT_AVIC_INCOMP_IPI:
+        svm_avic_vmexit_do_incomp_ipi(regs);
+        break;
+
+    case VMEXIT_AVIC_NOACCEL:
+        svm_avic_vmexit_do_noaccel(regs);
+        break;
+
     default:
     unexpected_exit_type:
         gdprintk(XENLOG_ERR, "unexpected VMEXIT: exit reason = %#"PRIx64", "
