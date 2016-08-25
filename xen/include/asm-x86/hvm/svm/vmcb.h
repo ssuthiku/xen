@@ -496,6 +496,12 @@ struct __packed vmcb_struct {
 };
 
 struct svm_domain {
+    u32 avic_max_vcpu_id;
+    bool_t avic_access_page_done;
+    paddr_t avic_log_ait_mfn;
+    paddr_t avic_phy_ait_mfn;
+    u32 ldr_reg;
+    u32 ldr_mode;
 };
 
 struct arch_svm_struct {
@@ -529,6 +535,10 @@ struct arch_svm_struct {
         u64 length;
         u64 status;
     } osvw;
+
+    /* AVIC APIC backing page */
+    struct page_info *avic_bk_pg;
+    struct svm_avic_phy_ait_entry *avic_phy_id_cache;
 };
 
 struct vmcb_struct *alloc_vmcb(void);
