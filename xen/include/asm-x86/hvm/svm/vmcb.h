@@ -328,14 +328,15 @@ typedef union __packed
     struct 
     {
         u64 tpr:          8;
-        u64 irq:          1;
+        u64 irq:          1; /* ignored in avic mode */
         u64 rsvd0:        7;
-        u64 prio:         4;
-        u64 ign_tpr:      1;
+        u64 prio:         4; /* ignored in avic mode */
+        u64 ign_tpr:      1; /* ignored in avic mode */
         u64 rsvd1:        3;
         u64 intr_masking: 1;
-        u64 rsvd2:        7;
-        u64 vector:       8;
+        u64 rsvd2:        6;
+        u64 avic_enable:  1;
+        u64 vector:       8; /* ignored in avic mode */
         u64 rsvd3:       24;
     } fields;
 } vintr_t;
@@ -394,7 +395,8 @@ typedef union __packed
         uint32_t cr2: 1;
         /* debugctlmsr, last{branch,int}{to,from}ip */
         uint32_t lbr: 1;
-        uint32_t resv: 21;
+        uint32_t avic: 1;
+        uint32_t resv: 20;
     } fields;
 } vmcbcleanbits_t;
 
@@ -428,7 +430,8 @@ struct __packed vmcb_struct {
     u64 exitinfo2;              /* offset 0x80 */
     eventinj_t  exitintinfo;    /* offset 0x88 */
     u64 _np_enable;             /* offset 0x90 - cleanbit 4 */
-    u64 res08[2];
+    u64 avic_vapic_bar;         /* offset 0x98 */
+    u64 res08;                  /* offset 0xA0 */
     eventinj_t  eventinj;       /* offset 0xA8 */
     u64 _h_cr3;                 /* offset 0xB0 - cleanbit 4 */
     lbrctrl_t lbr_control;      /* offset 0xB8 */
@@ -437,7 +440,11 @@ struct __packed vmcb_struct {
     u64 nextrip;                /* offset 0xC8 */
     u8  guest_ins_len;          /* offset 0xD0 */
     u8  guest_ins[15];          /* offset 0xD1 */
-    u64 res10a[100];            /* offset 0xE0 pad to save area */
+    u64 avic_bk_pg_pa;          /* offset 0xE0 */
+    u64 res09a;                 /* offset 0xE8 */
+    u64 avic_log_apic_id;       /* offset 0xF0 */
+    u64 avic_phy_apic_id;       /* offset 0xF8 */
+    u64 res09b[96];             /* offset 0x100 pad to save area */
 
     svm_segment_register_t es;  /* offset 1024 - cleanbit 8 */
     svm_segment_register_t cs;  /* cleanbit 8 */
