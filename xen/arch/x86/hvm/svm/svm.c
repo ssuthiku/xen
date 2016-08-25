@@ -48,6 +48,7 @@
 #include <asm/hvm/svm/asid.h>
 #include <asm/hvm/svm/svm.h>
 #include <asm/hvm/svm/vmcb.h>
+#include <asm/hvm/svm/avic.h>
 #include <asm/hvm/svm/emulate.h>
 #include <asm/hvm/svm/intr.h>
 #include <asm/hvm/svm/svmdebug.h>
@@ -1162,11 +1163,12 @@ void svm_host_osvw_init()
 
 static int svm_domain_initialise(struct domain *d)
 {
-    return 0;
+    return svm_avic_dom_init(d);
 }
 
 static void svm_domain_destroy(struct domain *d)
 {
+    svm_avic_dom_destroy(d);
 }
 
 static int svm_vcpu_initialise(struct vcpu *v)
@@ -1459,6 +1461,7 @@ const struct hvm_function_table * __init start_svm(void)
     P(cpu_has_svm_decode, "DecodeAssists");
     P(cpu_has_pause_filter, "Pause-Intercept Filter");
     P(cpu_has_tsc_ratio, "TSC Rate MSR");
+    P(cpu_has_svm_avic, "AVIC");
 #undef P
 
     if ( !printed )
@@ -1799,6 +1802,10 @@ static int svm_msr_write_intercept(unsigned int msr, uint64_t msr_content)
 
     switch ( msr )
     {
+    case MSR_IA32_APICBASE:
+        if ( svm_avic_vcpu_enabled(v) )
+            svm_avic_update_vapic_bar(v, msr_content);
+        break;
     case MSR_IA32_SYSENTER_CS:
     case MSR_IA32_SYSENTER_ESP:
     case MSR_IA32_SYSENTER_EIP:

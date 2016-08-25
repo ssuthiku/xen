@@ -1457,6 +1457,15 @@ enforces the maximum theoretically necessary timeout of 670ms. Any number
 is being interpreted as a custom timeout in milliseconds. Zero or boolean
 false disable the quirk workaround, which is also the default.
 
+### svm\_avic
+> `= <boolean>`
+
+> Default: `false`
+
+This option enables Advance Virtual Interrupt Controller (AVIC),
+which is an extension of AMD Secure Virtual Machine (SVM) to vitualize
+local APIC for guest VM.
+
 ### sync\_console
 > `= <boolean>`
 
