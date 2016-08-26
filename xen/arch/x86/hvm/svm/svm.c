@@ -1495,6 +1495,16 @@ const struct hvm_function_table * __init start_svm(void)
     svm_function_table.hap_capabilities = HVM_HAP_SUPERPAGE_2MB |
         ((cpuid_edx(0x80000001) & 0x04000000) ? HVM_HAP_SUPERPAGE_1GB : 0);
 
+    if ( !cpu_has_svm_avic )
+        svm_avic = 0;
+
+    if ( svm_avic )
+    {
+        svm_function_table.deliver_posted_intr  = svm_avic_deliver_posted_intr,
+        svm_function_table.virtual_intr_delivery_enabled = svm_avic_enabled,
+        printk("SVM: AVIC enabled\n");
+    }
+
     return &svm_function_table;
 }
 
