@@ -1438,6 +1438,11 @@ static int svm_cpu_up(void)
     return 0;
 }
 
+static inline int svm_avic_enabled(void)
+{
+    return svm_avic;
+}
+
 const struct hvm_function_table * __init start_svm(void)
 {
     bool_t printed = 0;
@@ -1472,15 +1477,26 @@ const struct hvm_function_table * __init start_svm(void)
     P(cpu_has_svm_decode, "DecodeAssists");
     P(cpu_has_pause_filter, "Pause-Intercept Filter");
     P(cpu_has_tsc_ratio, "TSC Rate MSR");
-    P(cpu_has_svm_avic, "AVIC");
-#undef P
-
-    if ( !printed )
-        printk(" - none\n");
 
     svm_function_table.hap_supported = !!cpu_has_svm_npt;
     svm_function_table.hap_capabilities = HVM_HAP_SUPERPAGE_2MB |
         ((cpuid_edx(0x80000001) & 0x04000000) ? HVM_HAP_SUPERPAGE_1GB : 0);
+
+    if ( !cpu_has_svm_avic )
+        svm_avic = 0;
+
+    if ( svm_avic )
+    {
+        svm_function_table.deliver_posted_intr  = svm_avic_deliver_posted_intr;
+        svm_function_table.virtual_intr_delivery_enabled = svm_avic_enabled;
+        P(cpu_has_svm_avic, "AVIC (enabled)");
+    }
+    else
+        P(cpu_has_svm_avic, "AVIC (disabled)");
+#undef P
+
+    if ( !printed )
+        printk(" - none\n");
 
     return &svm_function_table;
 }

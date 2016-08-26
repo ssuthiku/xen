@@ -41,4 +41,7 @@ void svm_avic_vmexit_do_incomp_ipi(struct cpu_user_regs *regs);
 void svm_avic_vmexit_do_noaccel(struct cpu_user_regs *regs);
 
 void svm_avic_deliver_posted_intr(struct vcpu *v, u8 vector);
+
+void setup_avic_dump(void);
+
 #endif /* _SVM_AVIC_H_ */
