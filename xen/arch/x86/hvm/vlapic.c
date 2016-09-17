@@ -562,7 +562,7 @@ static void vlapic_set_tdcr(struct vlapic *vlapic, unsigned int val)
                 "timer_divisor: %d", vlapic->hw.timer_divisor);
 }
 
-static uint32_t vlapic_read_aligned(struct vlapic *vlapic, unsigned int offset)
+uint32_t vlapic_read_aligned(struct vlapic *vlapic, unsigned int offset)
 {
     switch ( offset )
     {
@@ -680,8 +680,7 @@ static void vlapic_tdt_pt_cb(struct vcpu *v, void *data)
     vcpu_vlapic(v)->hw.tdt_msr = 0;
 }
 
-static void vlapic_reg_write(struct vcpu *v,
-                             unsigned int offset, uint32_t val)
+void vlapic_reg_write(struct vcpu *v, unsigned int offset, uint32_t val)
 {
     struct vlapic *vlapic = vcpu_vlapic(v);
 
