@@ -204,12 +204,12 @@ void vmx_pi_hooks_assign(struct domain *d)
     if ( !iommu_intpost || !has_hvm_container_domain(d) )
         return;
 
-    ASSERT(!d->arch.hvm_domain.vmx.vcpu_block);
+    ASSERT(!d->arch.hvm_domain.pi_ops.vcpu_block);
 
-    d->arch.hvm_domain.vmx.vcpu_block = vmx_vcpu_block;
-    d->arch.hvm_domain.vmx.pi_switch_from = vmx_pi_switch_from;
-    d->arch.hvm_domain.vmx.pi_switch_to = vmx_pi_switch_to;
-    d->arch.hvm_domain.vmx.pi_do_resume = vmx_pi_do_resume;
+    d->arch.hvm_domain.pi_ops.vcpu_block = vmx_vcpu_block;
+    d->arch.hvm_domain.pi_ops.pi_switch_from = vmx_pi_switch_from;
+    d->arch.hvm_domain.pi_ops.pi_switch_to = vmx_pi_switch_to;
+    d->arch.hvm_domain.pi_ops.pi_do_resume = vmx_pi_do_resume;
 }
 
 /* This function is called when pcidevs_lock is held */
@@ -218,12 +218,12 @@ void vmx_pi_hooks_deassign(struct domain *d)
     if ( !iommu_intpost || !has_hvm_container_domain(d) )
         return;
 
-    ASSERT(d->arch.hvm_domain.vmx.vcpu_block);
+    ASSERT(d->arch.hvm_domain.pi_ops.vcpu_block);
 
-    d->arch.hvm_domain.vmx.vcpu_block = NULL;
-    d->arch.hvm_domain.vmx.pi_switch_from = NULL;
-    d->arch.hvm_domain.vmx.pi_switch_to = NULL;
-    d->arch.hvm_domain.vmx.pi_do_resume = NULL;
+    d->arch.hvm_domain.pi_ops.vcpu_block = NULL;
+    d->arch.hvm_domain.pi_ops.pi_switch_from = NULL;
+    d->arch.hvm_domain.pi_ops.pi_switch_to = NULL;
+    d->arch.hvm_domain.pi_ops.pi_do_resume = NULL;
 }
 
 static int vmx_domain_initialise(struct domain *d)
@@ -901,8 +901,8 @@ static void vmx_ctxt_switch_from(struct vcpu *v)
     vmx_restore_host_msrs();
     vmx_save_dr(v);
 
-    if ( v->domain->arch.hvm_domain.vmx.pi_switch_from )
-        v->domain->arch.hvm_domain.vmx.pi_switch_from(v);
+    if ( v->domain->arch.hvm_domain.pi_ops.pi_switch_from )
+        v->domain->arch.hvm_domain.pi_ops.pi_switch_from(v);
 }
 
 static void vmx_ctxt_switch_to(struct vcpu *v)
@@ -916,8 +916,8 @@ static void vmx_ctxt_switch_to(struct vcpu *v)
     vmx_restore_guest_msrs(v);
     vmx_restore_dr(v);
 
-    if ( v->domain->arch.hvm_domain.vmx.pi_switch_to )
-        v->domain->arch.hvm_domain.vmx.pi_switch_to(v);
+    if ( v->domain->arch.hvm_domain.pi_ops.pi_switch_to )
+        v->domain->arch.hvm_domain.pi_ops.pi_switch_to(v);
 }
 
 
@@ -3914,8 +3914,8 @@ void vmx_vmenter_helper(const struct cpu_user_regs *regs)
     struct hvm_vcpu_asid *p_asid;
     bool_t need_flush;
 
-    if ( curr->domain->arch.hvm_domain.vmx.pi_do_resume )
-        curr->domain->arch.hvm_domain.vmx.pi_do_resume(curr);
+    if ( curr->domain->arch.hvm_domain.pi_ops.pi_do_resume )
+        curr->domain->arch.hvm_domain.pi_ops.pi_do_resume(curr);
 
     if ( !cpu_has_vmx_vpid )
         goto out;
