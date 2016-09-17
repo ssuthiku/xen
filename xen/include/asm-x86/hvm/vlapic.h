@@ -132,6 +132,10 @@ void vlapic_ipi(struct vlapic *vlapic, uint32_t icr_low, uint32_t icr_high);
 
 int vlapic_apicv_write(struct vcpu *v, unsigned int offset);
 
+void vlapic_reg_write(struct vcpu *v, unsigned int offset, uint32_t val);
+
+uint32_t vlapic_read_aligned(struct vlapic *vlapic, unsigned int offset);
+
 struct vlapic *vlapic_lowest_prio(
     struct domain *d, const struct vlapic *source,
     int short_hand, uint32_t dest, bool_t dest_mode);
