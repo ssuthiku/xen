@@ -93,10 +93,14 @@ static int construct_vmcb(struct vcpu *v)
     vmcb->_dr_intercepts = ~0u;
 
     /* Intercept all control-register accesses except for CR2 and CR8. */
-    vmcb->_cr_intercepts = ~(CR_INTERCEPT_CR2_READ |
+    if ( !svm_avic_vcpu_enabled(v) )
+        vmcb->_cr_intercepts = ~(CR_INTERCEPT_CR2_READ |
                              CR_INTERCEPT_CR2_WRITE |
                              CR_INTERCEPT_CR8_READ |
                              CR_INTERCEPT_CR8_WRITE);
+    else
+        vmcb->_cr_intercepts = ~(CR_INTERCEPT_CR2_READ |
+                             CR_INTERCEPT_CR2_WRITE );
 
     /* I/O and MSR permission bitmaps. */
     arch_svm->msrpm = alloc_xenheap_pages(get_order_from_bytes(MSRPM_SIZE), 0);
