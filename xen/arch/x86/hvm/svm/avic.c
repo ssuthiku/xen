@@ -45,6 +45,83 @@ avic_get_phy_ait_entry(struct vcpu *v, int index)
 }
 
 /***************************************************************
+ * AVIC VCPU SCHEDULING
+ */
+static void avic_vcpu_load(struct vcpu *v)
+{
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+    int h_phy_apic_id;
+    struct svm_avic_phy_ait_entry entry;
+
+    if ( !svm_avic || !s->avic_phy_id_cache )
+        return;
+
+    if ( test_bit(_VPF_blocked, &v->pause_flags) )
+        return;
+
+    /* Note: APIC ID = 0xff is used for broadcast.
+     *       APIC ID > 0xff is reserved.
+     */
+    h_phy_apic_id = cpu_data[v->processor].apicid;
+    if ( h_phy_apic_id >= AVIC_PHY_APIC_ID_MAX )
+        return;
+
+    entry = *(s->avic_phy_id_cache);
+    smp_rmb();
+    entry.host_phy_apic_id = h_phy_apic_id;
+    entry.is_running = 1;
+    *(s->avic_phy_id_cache) = entry;
+    smp_wmb();
+}
+
+static void avic_vcpu_put(struct vcpu *v)
+{
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+    struct svm_avic_phy_ait_entry entry;
+
+    if ( !svm_avic || !s->avic_phy_id_cache )
+        return;
+
+    entry = *(s->avic_phy_id_cache);
+    smp_rmb();
+    entry.is_running = 0;
+    *(s->avic_phy_id_cache) = entry;
+    smp_wmb();
+}
+
+static void avic_vcpu_resume(struct vcpu *v)
+{
+    struct svm_avic_phy_ait_entry entry;
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+
+    if ( !svm_avic_vcpu_enabled(v) || !s->avic_phy_id_cache )
+        return;
+
+    ASSERT(!test_bit(_VPF_blocked, &v->pause_flags));
+
+    entry = *(s->avic_phy_id_cache);
+    smp_rmb();
+    entry.is_running = 1;
+    *(s->avic_phy_id_cache)= entry;
+    smp_wmb();
+}
+
+static void avic_vcpu_block(struct vcpu *v)
+{
+    struct svm_avic_phy_ait_entry entry;
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+
+    if ( !svm_avic_vcpu_enabled(v) || !s->avic_phy_id_cache )
+        return;
+
+    entry = *(s->avic_phy_id_cache);
+    smp_rmb();
+    entry.is_running = 0;
+    *(s->avic_phy_id_cache) = entry;
+    smp_wmb();
+}
+
+/***************************************************************
  * AVIC APIs
  */
 int svm_avic_dom_init(struct domain *d)
@@ -96,6 +173,11 @@ int svm_avic_dom_init(struct domain *d)
     mfn = page_to_mfn(pg);
     clear_domain_page(_mfn(mfn));
     d->arch.hvm_domain.svm.avic_phy_ait_mfn = mfn;
+
+    d->arch.hvm_domain.pi_ops.pi_switch_to = avic_vcpu_put;
+    d->arch.hvm_domain.pi_ops.pi_switch_from = avic_vcpu_load;
+    d->arch.hvm_domain.pi_ops.vcpu_block = avic_vcpu_block;
+    d->arch.hvm_domain.pi_ops.pi_do_resume = avic_vcpu_resume;
 
     return ret;
 err_out:
