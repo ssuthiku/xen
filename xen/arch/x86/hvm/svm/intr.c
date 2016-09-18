@@ -30,6 +30,7 @@
 #include <asm/hvm/io.h>
 #include <asm/hvm/support.h>
 #include <asm/hvm/vlapic.h>
+#include <asm/hvm/svm/avic.h>
 #include <asm/hvm/svm/svm.h>
 #include <asm/hvm/svm/intr.h>
 #include <asm/hvm/nestedhvm.h> /* for nestedhvm_vcpu_in_guestmode */
@@ -100,6 +101,9 @@ static void svm_enable_intr_window(struct vcpu *v, struct hvm_intack intack)
 
     HVMTRACE_3D(INTR_WINDOW, intack.vector, intack.source,
                 vmcb->eventinj.fields.v?vmcb->eventinj.fields.vector:-1);
+
+    if ( svm_avic_vcpu_enabled(v) )
+        return;
 
     /*
      * Create a dummy virtual interrupt to intercept as soon as the

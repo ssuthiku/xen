@@ -636,6 +636,34 @@ void svm_avic_vmexit_do_noaccel(struct cpu_user_regs *regs)
     return;
 }
 
+void svm_avic_deliver_posted_intr(struct vcpu *v, u8 vec)
+{
+    struct vlapic *vlapic = vcpu_vlapic(v);
+
+    /* Fallback to use non-AVIC if vcpu is not enabled with AVIC. */
+    if ( !svm_avic_vcpu_enabled(v) )
+    {
+        if ( !vlapic_test_and_set_vector(vec, &vlapic->regs->data[APIC_IRR]) )
+            vcpu_kick(v);
+        return;
+    }
+
+    if ( !(guest_cpu_user_regs()->eflags & X86_EFLAGS_IF) )
+        return;
+
+    if ( vlapic_test_and_set_vector(vec, &vlapic->regs->data[APIC_IRR]) )
+        return;
+
+    /*
+     * If vcpu is running on another cpu, hit the doorbell to signal
+     * it to process interrupt. Otherwise, kick it.
+     */
+    if ( v->is_running && (v != current) )
+        wrmsrl(AVIC_DOORBELL, cpu_data[v->processor].apicid);
+    else
+        vcpu_kick(v);
+}
+
 /*
  * Local variables:
  * mode: C
