@@ -27,6 +27,7 @@
 #include <asm/hvm/support.h>
 #include <asm/hvm/svm/avic.h>
 #include <asm/hvm/vlapic.h>
+#include <xen/keyhandler.h>
 #include <asm/p2m.h>
 #include <asm/page.h>
 
@@ -320,6 +321,8 @@ void svm_avic_vmexit_do_incomp_ipi(struct cpu_user_regs *regs)
     u32 id = vmcb->exitinfo2 >> 32;
     u32 index = vmcb->exitinfo2 && 0xFF;
 
+    curr->arch.hvm_svm.cnt_avic_incomp_ipi++;
+
     switch ( id )
     {
     case AVIC_INCMP_IPI_ERR_INVALID_INT_TYPE:
@@ -580,6 +583,8 @@ void svm_avic_vmexit_do_noaccel(struct cpu_user_regs *regs)
     u32 offset = vmcb->exitinfo1 & 0xFF0;
     u32 rw = (vmcb->exitinfo1 >> 32) & 0x1;
 
+    curr->arch.hvm_svm.cnt_avic_noaccel++;
+
     switch ( offset )
     {
     case APIC_ID:
@@ -654,14 +659,57 @@ void svm_avic_deliver_posted_intr(struct vcpu *v, u8 vec)
     if ( vlapic_test_and_set_vector(vec, &vlapic->regs->data[APIC_IRR]) )
         return;
 
+    v->arch.hvm_svm.cnt_avic_post_intr++;
     /*
      * If vcpu is running on another cpu, hit the doorbell to signal
      * it to process interrupt. Otherwise, kick it.
      */
     if ( v->is_running && (v != current) )
+    {
         wrmsrl(AVIC_DOORBELL, cpu_data[v->processor].apicid);
+        v->arch.hvm_svm.cnt_avic_doorbell++;
+    }
     else
         vcpu_kick(v);
+}
+
+static void avic_dump(unsigned char ch)
+{
+    struct domain *d;
+    struct vcpu *v;
+
+    printk("*********** SVM AVIC Statistics **************\n");
+
+    rcu_read_lock(&domlist_read_lock);
+
+    for_each_domain ( d )
+    {
+        if ( !is_hvm_domain(d) )
+            continue;
+        printk(">>> Domain %d <<<\n", d->domain_id);
+        for_each_vcpu ( d, v )
+        {
+            printk("\tVCPU %d\n", v->vcpu_id);
+            printk("\t* incomp_ipi = %u\n",
+                   v->arch.hvm_svm.cnt_avic_incomp_ipi);
+            printk("\t* noaccel    = %u\n",
+                   v->arch.hvm_svm.cnt_avic_noaccel);
+            printk("\t* post_intr  = %u\n",
+                   v->arch.hvm_svm.cnt_avic_post_intr);
+            printk("\t* doorbell   = %u\n",
+                   v->arch.hvm_svm.cnt_avic_doorbell);
+        }
+    }
+
+    rcu_read_unlock(&domlist_read_lock);
+
+    printk("**************************************\n");
+
+}
+
+void __init setup_avic_dump(void)
+{
+    register_keyhandler('j', avic_dump, "dump SVM AVIC", 1);
 }
 
 /*

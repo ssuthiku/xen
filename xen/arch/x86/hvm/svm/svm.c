@@ -1456,6 +1456,7 @@ const struct hvm_function_table * __init start_svm(void)
     }
 
     setup_vmcb_dump();
+    setup_avic_dump();
 
     svm_feature_flags = (current_cpu_data.extended_cpuid_level >= 0x8000000A ?
                          cpuid_edx(0x8000000A) : 0);

@@ -552,6 +552,12 @@ struct arch_svm_struct {
 
     struct avic_phy_apic_id_ent *avic_last_phy_id;
     u32 avic_last_ldr;
+
+    /* AVIC Statistics */
+    u32 cnt_avic_incomp_ipi;
+    u32 cnt_avic_noaccel;
+    u32 cnt_avic_post_intr;
+    u32 cnt_avic_doorbell;
 };
 
 struct vmcb_struct *alloc_vmcb(void);
