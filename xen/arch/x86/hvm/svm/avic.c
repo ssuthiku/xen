@@ -73,6 +73,79 @@ avic_get_phy_apic_id_ent(const struct vcpu *v, unsigned int index)
     return &avic_phy_apic_id_table[index];
 }
 
+static void avic_vcpu_load(struct vcpu *v)
+{
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+    int h_phy_apic_id;
+    struct avic_phy_apic_id_ent entry;
+
+    if ( !s->avic_last_phy_id )
+        return;
+
+    if ( test_bit(_VPF_blocked, &v->pause_flags) )
+        return;
+
+    /*
+     * Note: APIC ID = 0xff is used for broadcast.
+     *       APIC ID > 0xff is reserved.
+     */
+    h_phy_apic_id = cpu_data[v->processor].apicid;
+    ASSERT(h_phy_apic_id < AVIC_PHY_APIC_ID_MAX);
+
+    entry = *(s->avic_last_phy_id);
+    smp_rmb();
+    entry.host_phy_apic_id = h_phy_apic_id;
+    entry.is_running = 1;
+    *(s->avic_last_phy_id) = entry;
+    smp_wmb();
+}
+
+static void avic_vcpu_unload(struct vcpu *v)
+{
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+    struct avic_phy_apic_id_ent entry;
+
+    if ( !svm_avic || !s->avic_last_phy_id )
+        return;
+
+    entry = *(s->avic_last_phy_id);
+    smp_rmb();
+    entry.is_running = 0;
+    *(s->avic_last_phy_id) = entry;
+    smp_wmb();
+}
+
+static void avic_vcpu_resume(struct vcpu *v)
+{
+    struct avic_phy_apic_id_ent entry;
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+
+    ASSERT(svm_avic_vcpu_enabled(v));
+    ASSERT(s->avic_last_phy_id);
+    ASSERT(!test_bit(_VPF_blocked, &v->pause_flags));
+
+    entry = *(s->avic_last_phy_id);
+    smp_rmb();
+    entry.is_running = 1;
+    *(s->avic_last_phy_id) = entry;
+    smp_wmb();
+}
+
+static void avic_vcpu_block(struct vcpu *v)
+{
+    struct avic_phy_apic_id_ent entry;
+    struct arch_svm_struct *s = &v->arch.hvm_svm;
+
+    ASSERT(svm_avic_vcpu_enabled(v));
+    ASSERT(s->avic_last_phy_id);
+
+    entry = *(s->avic_last_phy_id);
+    smp_rmb();
+    entry.is_running = 0;
+    *(s->avic_last_phy_id) = entry;
+    smp_wmb();
+}
+
 int svm_avic_dom_init(struct domain *d)
 {
     int ret = 0;
@@ -126,6 +199,11 @@ int svm_avic_dom_init(struct domain *d)
     d->arch.hvm_domain.svm.avic_phy_apic_id_table_mfn = mfn;
 
     spin_lock_init(&d->arch.hvm_domain.svm.avic_ldr_mode_lock);
+
+    d->arch.hvm_domain.pi_ops.pi_switch_to = avic_vcpu_unload;
+    d->arch.hvm_domain.pi_ops.pi_switch_from = avic_vcpu_load;
+    d->arch.hvm_domain.pi_ops.vcpu_block = avic_vcpu_block;
+    d->arch.hvm_domain.pi_ops.pi_do_resume = avic_vcpu_resume;
 
     return ret;
  err_out:
