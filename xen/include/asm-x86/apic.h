@@ -16,6 +16,8 @@
 #define APIC_DEBUG   2
 
 #define	SET_APIC_LOGICAL_ID(x)	(((x)<<24))
+#define	GET_APIC_LOGICAL_ID(x)	(((x)>>24) & 0xFFu)
+#define	GET_APIC_PHYSICAL_ID(x)	(((x)>>24) & 0xFFu)
 
 #define IO_APIC_REDIR_VECTOR_MASK	0x000FF
 #define IO_APIC_REDIR_DEST_LOGICAL	0x00800

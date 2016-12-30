@@ -37,4 +37,7 @@ bool_t svm_avic_vcpu_enabled(const struct vcpu *v);
 void svm_avic_update_vapic_bar(const struct vcpu *v,uint64_t data);
 int svm_avic_init_vmcb(struct vcpu *v);
 
+void svm_avic_vmexit_do_incomp_ipi(struct cpu_user_regs *regs);
+void svm_avic_vmexit_do_noaccel(struct cpu_user_regs *regs);
+
 #endif /* _SVM_AVIC_H_ */
